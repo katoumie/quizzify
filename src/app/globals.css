@@ -1,0 +1,119 @@
+@import "tailwindcss";
+
+/* =========================
+   Global Theme Variables
+   ========================= */
+
+/* Base tokens (default / "theme-default") */
+:root {
+  /* App-wide theme tokens used by components */
+  --bg: #0a092d;                           /* page background */
+  --brand: #4262ff;                        /* primary accent */
+  --hover-bg: rgba(255, 255, 255, 0.08);   /* generic hover */
+  --bg-card: rgba(255, 255, 255, 0.05);    /* card bg on dark */
+  --btn-contrast: #ffffff;                 /* text color on brand */
+
+  /* Legacy aliases so your existing CSS keeps working */
+  --background: var(--bg);
+  --foreground: #e8eaf6;                   /* default text */
+}
+
+/* Perpetual theme overrides — applied when <html class="theme-perpetual"> */
+html.theme-perpetual {
+  --bg: #2a0b0b;                           /* deep maroon */
+  --brand: #f8cd00;                        /* gold */
+  --hover-bg: rgba(248, 205, 0, 0.12);
+  --bg-card: rgba(255, 255, 255, 0.06);
+  --btn-contrast: #000000;                 /* black text on gold */
+
+  /* keep legacy alias in sync */
+  --background: var(--bg);
+}
+
+/* Explicit default class (optional) — <html class="theme-default"> */
+html.theme-default {
+  --bg: #0a092d;
+  --brand: #4262ff;
+  --hover-bg: rgba(255, 255, 255, 0.08);
+  --bg-card: rgba(255, 255, 255, 0.05);
+  --btn-contrast: #ffffff;
+
+  --background: var(--bg);
+}
+
+/* =========================
+   Tailwind v4 design tokens
+   ========================= */
+@theme inline {
+  /* Map Tailwind colors to your CSS vars */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+
+  /* Prefer consuming var(--brand) where possible */
+  --color-brand: var(--brand);
+  --color-brand-600: #1D00D3; /* keep your original scale if used */
+  --color-brand-700: #1600a3;
+
+  /* neutrals (for text on dark) */
+  --color-ink-50:  #f5f6ff;
+  --color-ink-200: #c9cdf7;
+  --color-ink-400: #9aa1d9;
+  --color-ink-600: #636aa5;
+  --color-ink-800: #2b3057;
+
+  /* radii/shadow */
+  --radius-2xl: 1.25rem;
+  --shadow-soft: 0 8px 30px rgba(0,0,0,0.35);
+}
+
+/* =========================
+   Base + Typography
+   ========================= */
+html { scroll-behavior: smooth; }
+
+body {
+  background: var(--bg);
+  color: var(--foreground);
+  font-family: var(--font-poppins), ui-sans-serif, system-ui, sans-serif;
+}
+
+.h1 { @apply text-3xl md:text-5xl font-extrabold tracking-tight text-ink-50; }
+.h2 { @apply text-2xl md:text-3xl font-bold text-ink-50; }
+.lead { @apply text-base md:text-lg text-ink-200; }
+
+/* =========================
+   Components
+   ========================= */
+
+/* Buttons */
+.btn-primary {
+  @apply inline-flex items-center justify-center rounded-full px-5 py-2.5 font-semibold text-white transition;
+  background: var(--brand);
+  color: var(--btn-contrast);
+  box-shadow: var(--shadow-soft);
+}
+.btn-primary:hover { filter: brightness(1.05); }
+
+.btn-ghost {
+  @apply inline-flex items-center justify-center rounded-full px-5 py-2.5 font-semibold text-ink-200 transition;
+  background: transparent;
+}
+.btn-ghost:hover { background: var(--hover-bg); }
+
+/* Cards on dark */
+.card {
+  @apply rounded-2xl;
+  background: var(--bg-card);
+  box-shadow: var(--shadow-soft);
+}
+
+/* Section spacing */
+.section { @apply py-16 md:py-24; }
+
+/* =========================
+   Small helpers
+   ========================= */
+.text-brand { color: var(--brand); }
+.bg-brand { background-color: var(--brand); }
+.ring-brand { --tw-ring-color: var(--brand); }
+.hover-bg { background: var(--hover-bg); }

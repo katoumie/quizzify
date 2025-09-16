@@ -1,0 +1,138 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  username     String?  @unique
+  passwordHash String
+  avatar       String?
+  createdAt    DateTime @default(now())
+  role         Role     @default(STUDENT)
+
+  folders       Folder[]
+  sets          StudySet[]
+  likes         Like[]
+  // NEW: per-day study activity
+  studyDays     StudyDay[]
+  StudyActivity StudyActivity[]
+  badges        UserBadge[]
+
+  @@index([createdAt])
+}
+
+enum Role {
+  STUDENT
+  TEACHER
+  ADMIN
+}
+
+model Folder {
+  id        String     @id @default(cuid())
+  name      String
+  owner     User       @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  ownerId   String
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  sets      StudySet[]
+
+  @@index([ownerId, createdAt])
+}
+
+model StudySet {
+  id          String   @id @default(cuid())
+  title       String
+  description String?  @db.Text
+  owner       User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  ownerId     String
+  folder      Folder?  @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  folderId    String?
+  isPublic    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  cards   Card[]
+  likedBy Like[]
+
+  @@index([ownerId, createdAt])
+  @@index([folderId, createdAt])
+}
+
+model UserBadge {
+  userId        String
+  badgeKey      String
+  showcased     Boolean @default(false)
+  showcaseOrder Int? // 0..7 when showcased
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, badgeKey])
+  @@index([userId, showcased, showcaseOrder])
+}
+
+model StudyDay {
+  userId String
+  day    DateTime // store at UTC midnight
+  count  Int      @default(1) // how many study pings that day
+  user   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, day])
+  @@index([userId, day])
+}
+
+model Like {
+  userId    String
+  setId     String
+  createdAt DateTime @default(now())
+
+  user User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  set  StudySet @relation(fields: [setId], references: [id], onDelete: Cascade)
+
+  @@id([userId, setId])
+  @@index([setId])
+}
+
+model Card {
+  id         String   @id @default(cuid())
+  term       String
+  definition String
+  set        StudySet @relation(fields: [setId], references: [id], onDelete: Cascade)
+  setId      String
+  position   Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  // 👇 NEW (optional) fields for per-card images
+  imageUrl   String?   // public URL to the uploaded image (Supabase, Vercel Blob, S3, etc.)
+  imageAlt   String?   // optional alt text for accessibility
+
+  @@index([setId, position])
+}
+
+/**
+ * NEW: one row per user per calendar day they studied
+ */
+model StudyActivity {
+  id        String   @id @default(cuid())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  /**
+   * Stores just the date (no time). Postgres DATE column.
+   */
+  date      DateTime @db.Date
+  /**
+   * How much study happened that day (sets studied, sessions, etc.)
+   */
+  studied   Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, date])
+  @@index([userId, date])
+}
