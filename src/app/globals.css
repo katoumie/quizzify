@@ -32,7 +32,7 @@ html.theme-perpetual {
 
 /* Explicit default class (optional) — <html class="theme-default"> */
 html.theme-default {
-  --bg: #0a092d;
+  --bg: #070942;
   --brand: #4262ff;
   --hover-bg: rgba(255, 255, 255, 0.08);
   --bg-card: rgba(255, 255, 255, 0.05);

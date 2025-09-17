@@ -1,22 +1,22 @@
-// /src/app/signin/page.tsx
+// /src/app/signup/page.tsx
 "use client";
 
 import { useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import AuthForm from "@/components/auth/AuthForm";
 
-export default function SignInPage() {
+export default function SignUpPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  // Legacy support: /signin?mode=signup -> /signup
+  // Legacy support: /signup?mode=signin -> /signin
   useEffect(() => {
     const qpMode = (searchParams.get("mode") || "").toLowerCase();
-    if (qpMode === "signup") {
+    if (qpMode === "signin") {
       const email = searchParams.get("email");
-      router.replace("/signup" + (email ? `?email=${encodeURIComponent(email)}` : ""));
+      router.replace("/signin" + (email ? `?email=${encodeURIComponent(email)}` : ""));
     }
   }, [router, searchParams]);
 
-  return <AuthForm mode="signin" />;
+  return <AuthForm mode="signup" />;
 }
