@@ -2,7 +2,7 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 const SESSION_KEY = "qz_auth";
@@ -40,7 +40,7 @@ export default function AuthForm({ mode }: { mode: Mode }) {
     }
   }, [router]);
 
-  // Cleanup old domain theme flags (legacy)
+  // Cleanup old domain theme flags (legacy, safe to keep)
   useEffect(() => {
     try {
       localStorage.removeItem("qz_brand");
@@ -106,16 +106,13 @@ export default function AuthForm({ mode }: { mode: Mode }) {
   }
 
   return (
-    <section
-      className="min-h-screen flex items-center justify-center text-white px-6 py-12"
-      style={{ background: "var(--bg)" }}
-    >
+    <section className="min-h-screen flex items-center justify-center px-6 py-12 bg-[var(--bg)] text-[var(--foreground)]">
       {/* Auth card with faint outer glow */}
       <div className="relative w-full max-w-md">
         {/* faint outer glow */}
         <div className="pointer-events-none absolute -inset-4 rounded-3xl bg-[radial-gradient(closest-side,rgba(168,177,255,0.45),transparent)] blur-2xl opacity-70" />
         <div className="relative rounded-2xl border border-white/10 bg-[var(--bg-card)] backdrop-blur p-6 shadow-[0_0_0_1px_rgba(255,255,255,0.06)]">
-          {/* Logo + title (no small swap link underneath) */}
+          {/* Logo + title */}
           <div className="flex flex-col items-center">
             <div className="mb-3 rounded-full ring-1 ring-white/15 shadow">
               <Image src="/logo-q.png" alt="Quizzify" width={48} height={48} className="rounded-full" />
@@ -131,21 +128,21 @@ export default function AuthForm({ mode }: { mode: Mode }) {
               <div className="space-y-1">
                 <label className="text-sm">Username</label>
                 <input
-                  className="w-full rounded-md px-3 py-2 bg-white/10 outline-none placeholder:text-white/40 ring-1 ring-white/10 focus:outline-none focus:ring-2 focus:ring-[var(--brand)]"
+                  className="w-full rounded-md px-3 py-2 bg-white/10 outline-none placeholder:text-white/40 ring-1 ring-white/10 focus:outline-none focus:ring-2 focus:ring-[var(--brand)] text-[var(--foreground)]"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   onBlur={(e) => setUsername(e.target.value.trim())}
-                  placeholder="" // intentionally blank per your change
+                  placeholder="" // intentionally blank
                   required
                 />
-                {/* helper text removed */}
+                {/* helper text intentionally removed */}
               </div>
             )}
 
             <div className="space-y-1">
               <label className="text-sm">Email</label>
               <input
-                className="w-full rounded-md px-3 py-2 bg-white/10 outline-none placeholder:text-white/40 ring-1 ring-white/10 focus:outline-none focus:ring-2 focus:ring-[var(--brand)]"
+                className="w-full rounded-md px-3 py-2 bg-white/10 outline-none placeholder:text-white/40 ring-1 ring-white/10 focus:outline-none focus:ring-2 focus:ring-[var(--brand)] text-[var(--foreground)]"
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -164,11 +161,11 @@ export default function AuthForm({ mode }: { mode: Mode }) {
                 )}
               </div>
               <input
-                className="w-full rounded-md px-3 py-2 bg-white/10 outline-none placeholder:text-white/40 ring-1 ring-white/10 focus:outline-none focus:ring-2 focus:ring-[var(--brand)]"
+                className="w-full rounded-md px-3 py-2 bg-white/10 outline-none placeholder:text-white/40 ring-1 ring-white/10 focus:outline-none focus:ring-2 focus:ring-[var(--brand)] text-[var(--foreground)]"
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder={mode === "signup" ? "" : ""}
+                placeholder=""
                 required
               />
             </div>
@@ -194,7 +191,7 @@ export default function AuthForm({ mode }: { mode: Mode }) {
                   : "Creating..."
                 : mode === "signin"
                 ? "Sign in"
-                : "Sign up"}
+                : "Create account"}
             </button>
 
             {/* Divider with gap */}
@@ -208,13 +205,13 @@ export default function AuthForm({ mode }: { mode: Mode }) {
             <button
               type="button"
               onClick={handleGoogle}
-              className="w-full h-11 rounded-md px-4 text-sm font-medium border border-white/15 bg-white/5 hover:bg-white/10 transition flex items-center justify-center gap-3"
+              className="w-full h-11 rounded-md px-4 text-sm font-medium border border-white/15 bg-white/5 hover:bg-white/10 transition flex items-center justify-center gap-3 text-[var(--foreground)]"
             >
               <Image src="/google-logo.png" alt="Google" width={18} height={18} className="pointer-events-none" />
               <span>{googleLabel}</span>
             </button>
 
-            {/* Bottom link (kept) */}
+            {/* Bottom link */}
             <p className="text-xs text-white/70 text-center pt-1">
               {mode === "signin" ? (
                 <>
@@ -235,17 +232,6 @@ export default function AuthForm({ mode }: { mode: Mode }) {
           </form>
         </div>
       </div>
-
-      {/* Theme tokens */}
-      <style jsx global>{`
-        :root {
-          --bg: #070942; /* solid background */
-          --brand: #4262ff;
-          --hover-bg: rgba(255, 255, 255, 0.08);
-          --bg-card: rgba(255, 255, 255, 0.05);
-          --btn-contrast: #ffffff;
-        }
-      `}</style>
     </section>
   );
 }

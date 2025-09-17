@@ -1,7 +1,9 @@
+// /src/components/AppShell.tsx
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useRef, useState, type ReactNode, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import NotificationsPanel from "@/components/NotificationsPanel";
 
@@ -18,17 +20,16 @@ type SessionUser = {
   avatar?: Avatar;
 };
 
-/** Wrap pages with the shared header + sidebar; right slide-over comes from <NotificationsPanel/> */
 export default function AppShell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
 
-  // user display (from your local session)
+  // session display
   const [firstName, setFirstName] = useState("User");
   const [initial, setInitial] = useState("U");
   const [email, setEmail] = useState<string>("");
   const [avatarSrc, setAvatarSrc] = useState<string | null>(null);
-  const [profileHref, setProfileHref] = useState<string>("/u/me"); // NEW
+  const [profileHref, setProfileHref] = useState<string>("/u/me");
 
   // profile dropdown
   const [menuOpen, setMenuOpen] = useState(false);
@@ -40,45 +41,33 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const createRef = useRef<HTMLDivElement | null>(null);
   const createBtnRef = useRef<HTMLButtonElement | null>(null);
 
-  // sidebar states
-  const [desktopCollapsed, setDesktopCollapsed] = useState(false);
-  const [mobileOpen, setMobileOpen] = useState(false);
+  // Search
+  const [q, setQ] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const expandedRef = useRef<HTMLInputElement | null>(null);
+  const compactRef = useRef<HTMLInputElement | null>(null);
 
-  // ---- session bootstrap + live refresh ----
+  // session bootstrap
   useEffect(() => {
     const extractAvatarSrc = (avatar: Avatar): string | null => {
       if (!avatar) return null;
-      if (typeof avatar === "string") return avatar; // supports string shape
-      if (typeof avatar === "object" && "src" in avatar) {
-        return (avatar as AvatarObj).src;
-      }
+      if (typeof avatar === "string") return avatar;
+      if (typeof avatar === "object" && "src" in avatar) return (avatar as AvatarObj).src;
       return null;
     };
 
     const refreshFromStorage = () => {
       try {
         const raw = localStorage.getItem(SESSION_KEY);
-        if (!raw) {
-          router.replace("/signin");
-          return;
-        }
+        if (!raw) return router.replace("/signin");
         const session = JSON.parse(raw) as SessionUser | null;
-        if (!session?.id) {
-          router.replace("/signin");
-          return;
-        }
-
+        if (!session?.id) return router.replace("/signin");
         const em = session.email ?? "";
-        const display = session.username?.trim()
-          ? session.username.trim()
-          : deriveFirstName(em);
-
+        const display = session.username?.trim() ? session.username.trim() : deriveFirstName(em);
         setFirstName(display);
         setInitial(display.charAt(0).toUpperCase() || "U");
         setEmail(em);
         setAvatarSrc(extractAvatarSrc(session.avatar));
-
-        // NEW: build /u/[handle] — prefer username, fallback to user id
         const handle = (session.username?.trim() || session.id).trim();
         setProfileHref(`/u/${encodeURIComponent(handle)}`);
       } catch {
@@ -87,14 +76,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
     };
 
     refreshFromStorage();
-
-    // Cross-tab updates
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === SESSION_KEY) refreshFromStorage();
-    };
-    // Same-tab updates (Settings emits "qz:session-updated" after Save/Reset)
+    const onStorage = (e: StorageEvent) => e.key === SESSION_KEY && refreshFromStorage();
     const onCustom = () => refreshFromStorage();
-
     window.addEventListener("storage", onStorage);
     window.addEventListener("qz:session-updated", onCustom);
     return () => {
@@ -103,19 +86,18 @@ export default function AppShell({ children }: { children: ReactNode }) {
     };
   }, [router]);
 
-  // close profile dropdown on outside/Esc
+  // close menus on outside/Esc
   useEffect(() => {
     const onDocClick = (e: MouseEvent) => {
-      if (!menuOpen) return;
       const t = e.target as Node;
-      if (menuRef.current?.contains(t) || btnRef.current?.contains(t)) return;
-      setMenuOpen(false);
+      if (menuOpen && !(menuRef.current?.contains(t) || btnRef.current?.contains(t))) setMenuOpen(false);
+      if (createOpen && !(createRef.current?.contains(t) || createBtnRef.current?.contains(t))) setCreateOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         setMenuOpen(false);
-        setMobileOpen(false);
         setCreateOpen(false);
+        setSearchOpen(false);
       }
     };
     document.addEventListener("mousedown", onDocClick);
@@ -124,34 +106,36 @@ export default function AppShell({ children }: { children: ReactNode }) {
       document.removeEventListener("mousedown", onDocClick);
       document.removeEventListener("keydown", onKey);
     };
-  }, [menuOpen]);
+  }, [menuOpen, createOpen]);
 
-  // close CREATE dropdown on outside/Esc
+  // "/" hotkey: open expanded search
   useEffect(() => {
-    const onDocClick = (e: MouseEvent) => {
-      if (!createOpen) return;
-      const t = e.target as Node;
-      if (createRef.current?.contains(t) || createBtnRef.current?.contains(t)) return;
-      setCreateOpen(false);
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase();
+      const isEditable =
+        !!target &&
+        ((target as HTMLElement).isContentEditable || tag === "input" || tag === "textarea" || tag === "select");
+      if (isEditable) return;
+      e.preventDefault();
+      setSearchOpen(true);
+      // focus expanded after paint
+      setTimeout(() => {
+        expandedRef.current?.focus();
+        expandedRef.current?.select();
+      }, 0);
     };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setCreateOpen(false);
-    };
-    document.addEventListener("mousedown", onDocClick);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDocClick);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [createOpen]);
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
 
-  const handleHamburger = () => {
-    if (typeof window !== "undefined" && window.innerWidth < 768) {
-      setMobileOpen((v) => !v);
-    } else {
-      setDesktopCollapsed((v) => !v);
+  // focus expanded on open if triggered by click/focus
+  useEffect(() => {
+    if (searchOpen) {
+      setTimeout(() => expandedRef.current?.focus(), 0);
     }
-  };
+  }, [searchOpen]);
 
   const handleLogout = () => {
     localStorage.removeItem(SESSION_KEY);
@@ -166,56 +150,103 @@ export default function AppShell({ children }: { children: ReactNode }) {
     setCreateOpen(false);
   };
 
-  // ===== THEME: match signin page (Perpetual vs Default) =====
-  const isPerpetual = useMemo(() => email.toLowerCase().endsWith("@perpetual.edu.ph"), [email]);
+  const pageTitle = useMemo(() => {
+    if (!pathname) return "";
+    if (pathname.startsWith("/main")) return "Dashboard";
+    if (pathname.startsWith("/library")) return "Library";
+    if (pathname.startsWith("/learn")) return "Learn";
+    if (pathname.startsWith("/flashcards")) return "Flashcards";
+    if (pathname.startsWith("/explore")) return "Explore";
+    if (pathname.startsWith("/settings")) return "Settings";
+    if (pathname.startsWith("/achievements")) return "Achievements";
+    if (pathname.startsWith("/u/")) return "Profile";
+    const seg = pathname.split("/").filter(Boolean).pop() || "";
+    return seg ? seg.charAt(0).toUpperCase() + seg.slice(1) : "";
+  }, [pathname]);
 
   return (
-    <div className={`${isPerpetual ? "theme-perpetual" : "theme-default"} min-h-screen`} style={{ background: "var(--bg)" }}>
-      {/* ===== Header ===== */}
-      <header className="sticky top-0 z-[100] w-full" style={{ background: "var(--bg)" }}>
-        <div className="h-[72px] px-4 grid grid-cols-[auto_1fr_auto] items-center gap-3">
-          {/* Left cluster: hamburger + logo */}
+    <div className="min-h-screen bg-[var(--bg)] text-white">
+      {/* ===== Sticky Navbar (60px) ===== */}
+      <div className="sticky top-0 z-50 w-full border-b border-white/15" style={{ backgroundColor: "#18062e" }}>
+        <div className="h-[60px] px-4 flex items-center justify-between gap-3">
+          {/* Left cluster: logo + page title */}
           <div className="flex items-center gap-3">
-            <button
-              type="button"
-              aria-label="Toggle menu"
-              aria-controls="app-sidebar"
-              aria-expanded={!desktopCollapsed}
-              onClick={handleHamburger}
-              className="h-10 w-10 grid place-items-center rounded-lg hover:bg-white/10 text-white"
-            >
-              <SvgFileIcon src="/icons/menu_24.svg" className="h-6 w-6" />
-            </button>
-
-            <Link href="/main" aria-label="Quizzify home" className="font-[var(--font-inter)] text-[28px] leading-none select-none no-underline">
-              <span className="font-bold" style={{ color: "var(--brand)" }}>
-                Quizz
+            <Link href="/main" aria-label="Quizzify home" className="flex items-center gap-4 no-underline">
+              <Image
+                src="/logo-q.png"
+                alt="Quizzify"
+                width={32}
+                height={32}
+                className="rounded-full ring-1 ring-white/10"
+              />
+              <span className="text-sm md:text-base font-semibold text-white/80">
+                {pageTitle}
               </span>
-              <span className="font-bold text-white">ify</span>
             </Link>
           </div>
 
-          {/* Center search */}
-          <form action="/search" className="hidden md:block justify-self-center w-full max-w-3xl">
-            <label htmlFor="site-search" className="sr-only">
-              Search
-            </label>
-            <div className="relative group">
-              <SearchIcon className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-white/70 group-focus-within:text-white" />
-              <input
-                id="site-search"
-                name="q"
-                type="search"
-                placeholder="Flashcard sets, textbooks, questions"
-                autoComplete="off"
-                className="w-full h-11 rounded-xl text-white placeholder-white/80 pl-10 pr-4 text-sm ring-1 ring-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)] focus-visible:ring-offset-2"
-                style={{ backgroundColor: "rgba(255,255,255,0.08)" }}
-              />
-            </div>
-          </form>
-
-          {/* Right cluster: Create + Profile */}
+          {/* Right cluster: Search + Create + Profile */}
           <div className="flex items-center gap-3">
+            {/* Compact search (smaller height, inner focus ring, custom clear) */}
+            <form
+              action="/search"
+              className="hidden md:block w-[320px]"
+              onSubmit={(e) => {
+                if (!q.trim()) e.preventDefault();
+              }}
+            >
+              <label htmlFor="site-search" className="sr-only">Search</label>
+              <div
+                className="relative group"
+                onFocus={() => setSearchOpen(true)}
+              >
+                <SearchIcon className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-white/70 group-focus-within:text-white" />
+                <input
+                  ref={compactRef}
+                  id="site-search"
+                  name="q"
+                  type="search"
+                  value={q}
+                  onChange={(e) => setQ(e.target.value)}
+                  placeholder="Type / to search"
+                  autoComplete="off"
+                  className={[
+                    "w-full h-9 rounded-xl text-white placeholder-white/70 pl-9 pr-9 text-sm",
+                    "ring-1 ring-white/10",                   // subtle outer line (idle)
+                    "focus:outline-none focus:ring-1",        // remove outer glow/offset
+                    "focus:ring-white/0",                     // kill outer ring color
+                    "focus:[box-shadow:inset_0_0_0_2px_rgba(160,167,189,0.45)]", // inner faint gray ring
+                    "shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]",
+                  ].join(" ")}
+                  style={{ backgroundColor: "rgba(255,255,255,0.08)" }}
+                />
+                {/* Clear button (shows only when there's a query) */}
+                {q && (
+                  <button
+                    type="button"
+                    aria-label="Clear"
+                    onClick={() => {
+                      setQ("");
+                      compactRef.current?.focus();
+                    }}
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 h-6 w-6 grid place-items-center rounded-full ring-1 ring-white/15 hover:brightness-110"
+                    style={{ backgroundColor: "rgba(160,167,189,0.35)" }}
+                  >
+                    <SvgFileIcon src="/icons/cancel_24.svg" className="h-3.5 w-3.5 text-white/90" />
+                  </button>
+                )}
+                {/* Shortcut hint when empty */}
+                {!q && (
+                  <kbd
+                    className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 h-6 min-w-[22px] px-1 grid place-items-center rounded-md text-[11px] text-white/80 ring-1 ring-white/15"
+                    style={{ backgroundColor: "rgba(255,255,255,0.06)" }}
+                  >
+                    /
+                  </kbd>
+                )}
+              </div>
+            </form>
+
             {/* Create dropdown trigger */}
             <div className="relative">
               <button
@@ -225,10 +256,10 @@ export default function AppShell({ children }: { children: ReactNode }) {
                 aria-haspopup="menu"
                 aria-expanded={createOpen}
                 aria-label="Open create menu"
-                className="h-9 w-9 grid place-items-center rounded-full text-white hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)] focus-visible:ring-offset-2"
-                style={{ backgroundColor: "var(--brand)" }}
+                className="h-8 w-8 grid place-items-center rounded-full hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)] focus-visible:ring-offset-2"
+                style={{ backgroundColor: "#4262ff" }}
               >
-                <SvgFileIcon src="/icons/add_24.svg" className="h-4 w-4" />
+                <SvgFileIcon src="/icons/add_24.svg" className="h-[14px] w-[14px]" />
               </button>
 
               {/* Create dropdown */}
@@ -236,10 +267,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
                 ref={createRef}
                 role="menu"
                 aria-label="Create menu"
-                className={`absolute right-0 mt-2 w-52 overflow-hidden rounded-2xl border border-white/60 shadow-lg transition ${
+                className={`absolute right-0 mt-2 w-52 overflow-hidden rounded-2xl border border-white/10 bg-[var(--bg)] shadow-lg transition ${
                   createOpen ? "opacity-100 scale-100" : "pointer-events-none opacity-0 scale-95"
                 }`}
-                style={{ background: "var(--bg)" }}
               >
                 <div className="p-2">
                   <Link
@@ -263,7 +293,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
               </div>
             </div>
 
-            {/* Profile dropdown trigger — avatar-first */}
+            {/* Profile dropdown trigger */}
             <div className="relative">
               <button
                 ref={btnRef}
@@ -272,13 +302,13 @@ export default function AppShell({ children }: { children: ReactNode }) {
                 aria-haspopup="menu"
                 aria-expanded={menuOpen}
                 aria-label={`Open user menu for ${firstName}`}
-                className="h-9 w-9 grid place-items-center rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)] focus-visible:ring-offset-2"
+                className="h-8 w-8 grid place-items-center rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)] focus-visible:ring-offset-2"
               >
                 {avatarSrc ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={avatarSrc} alt="Your avatar" className="h-9 w-9 rounded-full object-cover" />
+                  <img src={avatarSrc} alt="Your avatar" className="h-8 w-8 rounded-full object-cover" />
                 ) : (
-                  <div className="h-9 w-9 rounded-full bg-white/10 grid place-items-center text-white/90 font-semibold">
+                  <div className="h-8 w-8 rounded-full bg-white/10 grid place-items-center text-white/90 text-sm font-semibold">
                     {initial}
                   </div>
                 )}
@@ -289,47 +319,22 @@ export default function AppShell({ children }: { children: ReactNode }) {
                 ref={menuRef}
                 role="menu"
                 aria-label="User menu"
-                className={`absolute right-0 mt-2 w-72 overflow-hidden rounded-2xl border border-white/60 shadow-lg transition ${
+                className={`absolute right-0 mt-2 w-72 overflow-hidden rounded-2xl border border-white/10 bg-[var(--bg)] shadow-lg transition ${
                   menuOpen ? "opacity-100 scale-100" : "pointer-events-none opacity-0 scale-95"
                 }`}
-                style={{ background: "var(--bg)" }}
               >
-                {/* Header */}
-                <div className="flex items-center gap-3 px-4 py-3">
-                  {avatarSrc ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={avatarSrc} alt="" className="h-10 w-10 rounded-full object-cover" />
-                  ) : (
-                    <div className="h-10 w-10 rounded-full bg-white/10 grid place-items-center text-white/90 font-semibold">
-                      {initial}
-                    </div>
-                  )}
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold text-white">{firstName}</div>
-                    <div className="truncate text-xs text-white">{email}</div>
-                  </div>
-                </div>
-
-                <div className="border-t border-white/60" />
-
-                {/* Section 1 */}
+                <MenuHeader avatarSrc={avatarSrc} initial={initial} firstName={firstName} email={email} />
+                <div className="border-t border-white/10" />
                 <div className="py-1">
-                  {/* Uses computed /u/[handle] */}
                   <MenuRow href={profileHref} iconSrc="/icons/profile_24.svg" label="Profile" />
                   <MenuRow href="/achievements" iconSrc="/icons/trophy_24.svg" label="Achievements" />
                   <MenuRow href="/settings" iconSrc="/icons/settings_24.svg" label="Settings" />
                 </div>
-
-                <div className="border-t border-white/60" />
-
-                {/* Section 2 */}
+                <div className="border-t border-white/10" />
                 <div className="py-1">
                   <MenuRow asButton onClick={handleLogout} iconSrc="/icons/logout_24.svg" label="Log out" danger />
                 </div>
-
-                <div className="border-t border-white/60" />
-
-                {/* Section 3 */}
+                <div className="border-t border-white/10" />
                 <div className="py-1">
                   <MenuRow href="/help" iconSrc="/icons/help_24.svg" label="Help and feedback" />
                 </div>
@@ -337,80 +342,110 @@ export default function AppShell({ children }: { children: ReactNode }) {
             </div>
           </div>
         </div>
-      </header>
-
-      {/* ===== Mobile sidebar overlay (md:hidden) ===== */}
-      <div className={`md:hidden fixed inset-0 z-40 ${mobileOpen ? "" : "pointer-events-none"}`}>
-        {/* scrim */}
-        <div
-          className={`absolute inset-0 bg-black/40 transition-opacity ${mobileOpen ? "opacity-100" : "opacity-0"}`}
-          onClick={() => setMobileOpen(false)}
-        />
-        {/* panel */}
-        <aside
-          className={`absolute inset-y-0 left-0 w-72 px-3 pb-3 pt-4 transform transition-transform duration-300 ${
-            mobileOpen ? "translate-x-0" : "-translate-x-full"
-          }`}
-          style={{ background: "var(--bg)" }}
-        >
-          <SidebarExpanded isActive={isActive} onNotifications={() => window.dispatchEvent(new CustomEvent("qz:open-notifs"))} />
-        </aside>
       </div>
 
       {/* ===== Desktop layout: fixed left rail + content to the right ===== */}
       <div className="hidden md:block">
         <aside
           id="app-sidebar"
-          className={`fixed left-0 top-[72px] z-30 h-[calc(100vh-72px)] px-2 pt-2 transition-[width,transform] duration-300 ease-out ${
-            desktopCollapsed ? "w-[72px]" : "w-[260px]"
-          }`}
-          style={{ background: "var(--bg)" }}
+          className="fixed left-0 top-[61px] z-30 h-[calc(109vh-70px)] w-[260px] px-2 pt-2 border-r border-white/15"
+          style={{ background: "var(--sidebar-bg)" }}
         >
-          {desktopCollapsed ? (
-            <SidebarCollapsed isActive={isActive} onNotifications={() => window.dispatchEvent(new CustomEvent("qz:open-notifs"))} />
-          ) : (
-            <SidebarExpanded isActive={isActive} onNotifications={() => window.dispatchEvent(new CustomEvent("qz:open-notifs"))} />
-          )}
+          <SidebarExpanded
+            isActive={(href) => isActive(href)}
+            onNotifications={() => window.dispatchEvent(new CustomEvent("qz:open-notifs"))}
+          />
         </aside>
 
-        {/* Content column clears the rail width */}
-        <main className={`${desktopCollapsed ? "md:pl-[72px]" : "md:pl-[260px]"} px-4 py-6 transition-[padding] duration-300`}>
+        <main className="md:pl-[260px] px-4 py-6 transition-[padding] duration-300">
           <div className="mx-auto max-w-[1200px]">{children}</div>
         </main>
       </div>
 
-      {/* ===== Notifications slide-over ===== */}
-      <NotificationsPanel />
+      {/* ===== Expanded search overlay (card + dim/blur) ===== */}
+      {searchOpen && (
+        <div className="fixed inset-0 z-[60]">
+          {/* Scrim with mild blur */}
+          <div
+            className="absolute inset-0 bg-black/40 backdrop-blur-[2px]"
+            onClick={() => setSearchOpen(false)}
+          />
+          {/* Floating search card (extends to the left) */}
+          <div
+            className="absolute left-3 right-3 md:left-3 md:right-3 top-2"
+          >
+            <div className="mx-auto max-w-[1600px] rounded-2xl border border-white/15 shadow-2xl"
+                 style={{ background: "var(--bg)" }}>
+              <div className="p-3 md:p-4">
+                <div className="relative">
+                  <SearchIcon className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-white/70" />
+                  <input
+                    ref={expandedRef}
+                    id="site-search-expanded"
+                    name="q"
+                    value={q}
+                    onChange={(e) => setQ(e.target.value)}
+                    placeholder="Search sets, folders, questions…"
+                    className={[
+                      "w-full h-12 rounded-xl text-white placeholder-white/70 pl-10 pr-10 text-[15px]",
+                      "ring-1 ring-white/10",
+                      "focus:outline-none focus:ring-1 focus:ring-white/0",
+                      "focus:[box-shadow:inset_0_0_0_2px_rgba(160,167,189,0.45)]",
+                      "shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]",
+                    ].join(" ")}
+                    style={{ backgroundColor: "rgba(255,255,255,0.08)" }}
+                    autoFocus
+                  />
+                  {q && (
+                    <button
+                      type="button"
+                      aria-label="Clear"
+                      onClick={() => {
+                        setQ("");
+                        expandedRef.current?.focus();
+                      }}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 h-7 w-7 grid place-items-center rounded-full ring-1 ring-white/15 hover:brightness-110"
+                      style={{ backgroundColor: "rgba(160,167,189,0.35)" }}
+                    >
+                      <SvgFileIcon src="/icons/cancel_24.svg" className="h-4 w-4 text-white/90" />
+                    </button>
+                  )}
+                </div>
+                {/* Results area placeholder (optional) */}
+                {/* <div className="mt-3 text-white/70 text-sm">Recent searches…</div> */}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
-      {/* Theme tokens (same as signin) */}
-      <style jsx global>{`
-        :root {
-          --bg: #0a092d;
-          --brand: #4262ff;
-          --hover-bg: rgba(255, 255, 255, 0.08);
-          --bg-card: rgba(255, 255, 255, 0.05);
-          --btn-contrast: #ffffff;
-        }
-        .theme-perpetual {
-          --bg: #2a0b0b;
-          --brand: #f8cd00;
-          --hover-bg: rgba(248, 205, 0, 0.12);
-          --bg-card: rgba(255, 255, 255, 0.06);
-          --btn-contrast: #000000;
-        }
-        .theme-default {
-          --bg: #0a092d;
-          --brand: #4262ff;
-          --hover-bg: rgba(255, 255, 255, 0.08);
-          --bg-card: rgba(255, 255, 255, 0.05);
-          --btn-contrast: #ffffff;
-        }
-      `}</style>
+      <NotificationsPanel />
     </div>
   );
 }
 
 /* ========= Reusable parts ========= */
+
+function MenuHeader({
+  avatarSrc, initial, firstName, email,
+}: { avatarSrc: string | null; initial: string; firstName: string; email: string }) {
+  return (
+    <div className="flex items-center gap-3 px-4 py-3">
+      {avatarSrc ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={avatarSrc} alt="" className="h-10 w-10 rounded-full object-cover" />
+      ) : (
+        <div className="h-10 w-10 rounded-full bg-white/10 grid place-items-center text-white/90 font-semibold">
+          {initial}
+        </div>
+      )}
+      <div className="min-w-0">
+        <div className="truncate text-sm font-semibold">{firstName}</div>
+        <div className="truncate text-xs">{email}</div>
+      </div>
+    </div>
+  );
+}
 
 function MenuRow({
   href,
@@ -472,7 +507,7 @@ function SidebarExpanded({
         <SideItem href="/learn" icon={<SvgFileIcon src="/icons/learn_24.svg" className="h-5 w-5" />} label="Learn" active={isActive("/learn")} />
         <SideItem href="/flashcards" icon={<SvgFileIcon src="/icons/flashcards_24.svg" className="h-5 w-5" />} label="Flashcards" active={isActive("/flashcards")} />
         <SideItem href="/explore" icon={<SvgFileIcon src="/icons/search_24.svg" className="h-5 w-5" />} label="Explore" active={isActive("/explore")} />
-        <SideItemButton onClick={onNotifications} icon={<SvgFileIcon src="/icons/notifications_24.svg" className="h-5 w-5" />} label="Notifications" badge="1" />
+        <SideItemButton onClick={onNotifications} icon={<SvgFileIcon src="/icons/notifications_24.svg" className="h-5 w-5" />} label="Notifications" />
       </nav>
 
       <hr className="my-3 border-white/10" />
@@ -480,106 +515,6 @@ function SidebarExpanded({
       <SideItemButton icon={<SvgFileIcon src="/icons/add_24.svg" className="h-4 w-4" />} label="New folder" onClick={() => {}} />
     </div>
   );
-}
-
-/* ---- Sidebar (collapsed icon-only rail) ---- */
-function SidebarCollapsed({
-  isActive,
-  onNotifications,
-}: {
-  isActive: (href: string) => boolean;
-  onNotifications: () => void;
-}) {
-  return (
-    <div className="w-[72px] py-3 flex flex-col items-center text-white">
-      <div className="mb-2" />
-      <IconItem href="/main" active={isActive("/main")} tooltip="Home">
-        <SvgFileIcon src="/icons/home_24.svg" className="h-5 w-5" />
-      </IconItem>
-      <IconItem href="/library" active={isActive("/library")} tooltip="Library">
-        <SvgFileIcon src="/icons/folder_icon.svg" className="h-5 w-5" />
-      </IconItem>
-      <IconItem href="/learn" active={isActive("/learn")} tooltip="Learn">
-        <SvgFileIcon src="/icons/learn_24.svg" className="h-5 w-5" />
-      </IconItem>
-      <IconItem href="/flashcards" active={isActive("/flashcards")} tooltip="Flashcards">
-        <SvgFileIcon src="/icons/flashcards_24.svg" className="h-5 w-5" />
-      </IconItem>
-      <IconItem href="/explore" active={isActive("/explore")} tooltip="Explore">
-        <SvgFileIcon src="/icons/search_24.svg" className="h-5 w-5" />
-      </IconItem>
-      <IconItemButton onClick={onNotifications} tooltip="Notifications" badge>
-        <SvgFileIcon src="/icons/notifications_24.svg" className="h-5 w-5" />
-      </IconItemButton>
-
-      <Divider />
-      <IconItem href="#" tooltip="New folder">
-        <SvgFileIcon src="/icons/add_24.svg" className="h-5 w-5" />
-      </IconItem>
-    </div>
-  );
-}
-
-/* Collapsed icon helper (link) */
-function IconItem({
-  href,
-  children,
-  active = false,
-  tooltip,
-  badge = false,
-}: {
-  href: string;
-  children: ReactNode;
-  active?: boolean;
-  tooltip?: string;
-  badge?: boolean;
-}) {
-  return (
-    <Link href={href} className="relative my-1" aria-label={tooltip} title={tooltip}>
-      <div
-        className={`h-10 w-10 grid place-items-center rounded-xl transition ${
-          active ? "bg-[var(--brand)]/10 ring-2 ring-[var(--brand)]/30 text-[var(--brand)]" : "hover:bg-white/10 hover:ring-1 hover:ring-white/10 text-white/90"
-        }`}
-      >
-        <span className="block">{children}</span>
-      </div>
-      {badge && (
-        <span className="absolute -right-1 -top-1 inline-flex h-4 min-w-[16px] rounded-full bg-red-500 text-[10px] px-1 justify-center items-center">
-          1
-        </span>
-      )}
-    </Link>
-  );
-}
-
-/* Collapsed icon helper (button) */
-function IconItemButton({
-  children,
-  tooltip,
-  badge = false,
-  onClick,
-}: {
-  children: ReactNode;
-  tooltip?: string;
-  badge?: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button type="button" onClick={onClick} className="relative my-1" aria-label={tooltip} title={tooltip}>
-      <div className="h-10 w-10 grid place-items-center rounded-xl transition hover:bg-white/10 hover:ring-1 hover:ring-white/10 text-white/90">
-        <span className="block">{children}</span>
-      </div>
-      {badge && (
-        <span className="absolute -right-1 -top-1 inline-flex h-4 min-w-[16px] rounded-full bg-red-500 text-[10px] px-1 justify-center items-center">
-          1
-        </span>
-      )}
-    </button>
-  );
-}
-
-function Divider() {
-  return <div className="my-3 h-px w-10 bg-white/10" />;
 }
 
 /* Expanded side item (link) */
@@ -600,7 +535,9 @@ function SideItem({
     <Link
       href={href}
       className={`group flex items-center gap-3 h-9 px-3 rounded-lg ${
-        active ? "bg-[var(--brand)]/10 ring-2 ring-[var(--brand)]/30 text-[var(--brand)]" : "hover:bg-white/10 hover:ring-1 hover:ring-white/10 text-white/90"
+        active
+          ? "bg-[#2a1a63] text-[#a8b1ff]"
+          : "hover:bg-white/10 hover:ring-1 hover:ring-white/10 text-white/90"
       }`}
     >
       <span className="shrink-0 flex h-5 w-5 items-center justify-center">{icon}</span>
@@ -643,7 +580,7 @@ function SideItemButton({
   );
 }
 
-/* ========== File-based SVG icon (tints via currentColor) ========== */
+/* Masked SVG icon helper (tints via currentColor) */
 function SvgFileIcon({ src, className = "" }: { src: string; className?: string }) {
   const imageUrl = `url(${src})`;
   return (
@@ -665,19 +602,12 @@ function SvgFileIcon({ src, className = "" }: { src: string; className?: string 
   );
 }
 
-/* ====== Tiny inline icons kept for header UI ====== */
+/* Small inline search icon */
 function SearchIcon({ className = "" }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" className={`block ${className}`} fill="none" stroke="currentColor" strokeWidth={1.8} aria-hidden="true">
       <circle cx="11" cy="11" r="7" />
       <path d="M20 20l-3.2-3.2" />
-    </svg>
-  );
-}
-function ChevronIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" className={`block ${className}`} fill="none" stroke="currentColor" strokeWidth={2} aria-hidden="true">
-      <path d="M6 9l6 6 6-6" />
     </svg>
   );
 }

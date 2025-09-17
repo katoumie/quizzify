@@ -30,24 +30,21 @@ export default function Hero() {
     <section className="relative isolate min-h-screen overflow-hidden">
       {/* Background (solid top, gradient only at the bottom) */}
       <div className="absolute inset-0 -z-20">
-        {/* Solid base updated to #070942 */}
-        <div className="absolute inset-0 bg-[#070942]" />
+        <div className="absolute inset-0 bg-[#18062e]" />
 
-        {/* Soft dark band (starts lower; reduced coverage) */}
         <div
           className="pointer-events-none absolute inset-x-0 bottom-0 h-[48vh]"
           style={{
             background:
-              "linear-gradient(to bottom, rgba(7,9,66,0) 0%, rgba(18,22,56,0.75) 58%, rgba(18,22,56,0.92) 82%, rgba(18,22,56,0) 100%)",
+              "linear-gradient(to bottom, rgba(24,6,46,0) 0%, rgba(24,6,46,0.65) 58%, rgba(24,6,46,0.90) 82%, rgba(24,6,46,0) 100%)",
           }}
         />
 
-        {/* Bottom lighter gradient starts later (reduced height & pushed stops) */}
         <div
           className="pointer-events-none absolute inset-x-0 bottom-0 h-[30vh]"
           style={{
             background:
-              "linear-gradient(to bottom, rgba(7,9,66,0) 0%, #1e2f4b 55%, #28516a 80%, #2d6e88 100%)",
+              "linear-gradient(to bottom, rgba(24,6,46,0) 0%, #2a1a63 55%, #3b2a86 80%, #4e3fb9 100%)",
           }}
         />
       </div>
@@ -97,7 +94,7 @@ export default function Hero() {
       {/* Main hero */}
       <div className="relative mx-auto w-full max-w-[90rem] px-4 sm:px-6 lg:px-8 pt-0 -mt-2">
         <div className="grid grid-cols-1 md:grid-cols-2 items-start gap-6 lg:gap-12 min-h-[calc(100vh-70px)]">
-          <div className="text-white max-w-[42rem]">
+          <div className="text-white max-w-[42rem] md:self-center md:-translate-y-70">
             <div className="mb-2">
               <Image
                 src="/logo.png"
@@ -109,11 +106,11 @@ export default function Hero() {
               />
             </div>
 
-            <h1 className="font-[var(--font-display-fredoka)] text-4xl md:text-6xl font-extrabold leading-tight">
-              Learning made fun
+            <h1 className="font-[var(--font-display-fredoka)] text-4xl md:text-6xl font-bold leading-tight">
+              Smarter studying, powered by AI.
             </h1>
-            <p className="mt-3 text-white/100 text-base md:text-lg">
-              Join to make your study session feel like quests, not chores.
+            <p className="mt-3 text-white/100 font-semibold text-base md:text-lg">
+              Join to make every study session more effective and engaging.
             </p>
 
             {/* Email capture */}

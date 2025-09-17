@@ -4,42 +4,30 @@
    Global Theme Variables
    ========================= */
 
-/* Base tokens (default / "theme-default") */
+/* Base tokens (DEFAULT) */
 :root {
   /* App-wide theme tokens used by components */
-  --bg: #0a092d;                           /* page background */
+  --bg: #18062e;                           /* page background (DEFAULT) */
   --brand: #4262ff;                        /* primary accent */
   --hover-bg: rgba(255, 255, 255, 0.08);   /* generic hover */
   --bg-card: rgba(255, 255, 255, 0.05);    /* card bg on dark */
   --btn-contrast: #ffffff;                 /* text color on brand */
-
+  --sidebar-bg: #180733;
   /* Legacy aliases so your existing CSS keeps working */
   --background: var(--bg);
-  --foreground: #e8eaf6;                   /* default text */
+  --foreground: #FFFFFF;                   /* default text */
 }
 
-/* Perpetual theme overrides — applied when <html class="theme-perpetual"> */
-html.theme-perpetual {
-  --bg: #2a0b0b;                           /* deep maroon */
-  --brand: #f8cd00;                        /* gold */
-  --hover-bg: rgba(248, 205, 0, 0.12);
-  --bg-card: rgba(255, 255, 255, 0.06);
-  --btn-contrast: #000000;                 /* black text on gold */
-
-  /* keep legacy alias in sync */
+/* (You can add future themes later, e.g.)
+[data-theme="my-theme"] {
+  --bg: ...;
+  --brand: ...;
+  --hover-bg: ...;
+  --bg-card: ...;
+  --btn-contrast: ...;
   --background: var(--bg);
 }
-
-/* Explicit default class (optional) — <html class="theme-default"> */
-html.theme-default {
-  --bg: #070942;
-  --brand: #4262ff;
-  --hover-bg: rgba(255, 255, 255, 0.08);
-  --bg-card: rgba(255, 255, 255, 0.05);
-  --btn-contrast: #ffffff;
-
-  --background: var(--bg);
-}
+*/
 
 /* =========================
    Tailwind v4 design tokens
@@ -51,7 +39,7 @@ html.theme-default {
 
   /* Prefer consuming var(--brand) where possible */
   --color-brand: var(--brand);
-  --color-brand-600: #1D00D3; /* keep your original scale if used */
+  --color-brand-600: #1D00D3;
   --color-brand-700: #1600a3;
 
   /* neutrals (for text on dark) */
@@ -74,7 +62,7 @@ html { scroll-behavior: smooth; }
 body {
   background: var(--bg);
   color: var(--foreground);
-  font-family: var(--font-poppins), ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-mona), ui-sans-serif, system-ui, sans-serif;
 }
 
 .h1 { @apply text-3xl md:text-5xl font-extrabold tracking-tight text-ink-50; }
