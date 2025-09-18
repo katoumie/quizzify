@@ -13,7 +13,7 @@ export default function Hero() {
   const [scrolled, setScrolled] = useState(false);
 
   useEffect(() => {
-    const onScroll = () => setScrolled(window.scrollY >= 120); // delayed solid
+    const onScroll = () => setScrolled(window.scrollY >= 120);
     onScroll();
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
@@ -27,11 +27,10 @@ export default function Hero() {
   }
 
   return (
-    <section className="relative isolate min-h-screen overflow-hidden">
-      {/* Background (solid top, gradient only at the bottom) */}
+    <section className="relative isolate min-h-[100svh] overflow-hidden">
+      {/* Background */}
       <div className="absolute inset-0 -z-20">
         <div className="absolute inset-0 bg-[#18062e]" />
-
         <div
           className="pointer-events-none absolute inset-x-0 bottom-0 h-[48vh]"
           style={{
@@ -39,7 +38,6 @@ export default function Hero() {
               "linear-gradient(to bottom, rgba(24,6,46,0) 0%, rgba(24,6,46,0.65) 58%, rgba(24,6,46,0.90) 82%, rgba(24,6,46,0) 100%)",
           }}
         />
-
         <div
           className="pointer-events-none absolute inset-x-0 bottom-0 h-[30vh]"
           style={{
@@ -49,9 +47,15 @@ export default function Hero() {
         />
       </div>
 
-      {/* Fixed Navbar (70px). Transparent at top; fades to #0d1117 after ~120px */}
+      {/* Fixed Navbar (70px) */}
       <header className="fixed inset-x-0 top-0 z-50 h-[70px]">
-        <nav className="relative w-full h-full px-6 sm:px-8 lg:px-14 flex items-center justify-between">
+        <nav
+          className="relative w-full h-full flex items-center justify-between"
+          style={{
+            paddingLeft: "max(1rem, env(safe-area-inset-left))",
+            paddingRight: "max(1rem, env(safe-area-inset-right))",
+          }}
+        >
           {/* Fade layer */}
           <div
             aria-hidden
@@ -88,21 +92,19 @@ export default function Hero() {
         </nav>
       </header>
 
-      {/* Spacer so content doesn't sit under the fixed nav */}
-      <div className="h-[70px]" />
-
-      {/* Main hero */}
-      <div className="relative mx-auto w-full max-w-[90rem] px-4 sm:px-6 lg:px-8 pt-0 -mt-2">
-        <div className="grid grid-cols-1 md:grid-cols-2 items-start gap-6 lg:gap-12 min-h-[calc(100vh-70px)]">
-          <div className="text-white max-w-[42rem] md:self-center md:-translate-y-70">
-            <div className="mb-2">
+      {/* Main hero — pad top equals nav height + small gap */}
+      <div className="relative mx-auto w-full max-w-screen-2xl px-4 sm:px-6 lg:px-8 pt-[86px]">
+        <div className="grid grid-cols-1 md:grid-cols-2 items-start gap-6 lg:gap-10 min-h-[calc(100svh-70px)]">
+          {/* Left: copy + wordmark */}
+          <div className="text-white max-w-[44rem]">
+            <div className="mb-1">
               <Image
                 src="/logo.png"
                 alt="Quizzify"
-                width={800}
-                height={100}
+                width={720}
+                height={120}
                 priority
-                className="w-full max-w-[800px] h-auto"
+                className="w-full max-w-[520px] sm:max-w-[560px] md:max-w-[600px] lg:max-w-[680px] h-auto"
               />
             </div>
 
@@ -114,8 +116,8 @@ export default function Hero() {
             </p>
 
             {/* Email capture */}
-            <form onSubmit={onSubmit} className="mt-6">
-              <div className="flex w-full max-w-2xl items-center gap-1 rounded-xl bg-white p-1 shadow-lg ring-1 ring-black/10">
+            <form onSubmit={onSubmit} className="mt-5">
+              <div className="flex w-full max-w-2xl items-stretch gap-2 rounded-xl bg-white p-1 shadow-lg ring-1 ring-black/10 flex-col sm:flex-row">
                 <div className="relative flex-1">
                   <input
                     id="hero-email"
@@ -126,7 +128,7 @@ export default function Hero() {
                     onFocus={() => setFocused(true)}
                     onBlur={() => setFocused(false)}
                     placeholder={focused && !email ? "you@domain.com" : " "}
-                    className="peer h-12 w-full bg-transparent px-4 pt-3 text-[15px] text-black placeholder-black/40 focus:outline-none rounded-lg ring-0 focus:ring-2 focus:ring-[var(--accent)]"
+                    className="peer h-11 w-full bg-transparent px-4 pt-3 text-[15px] text-black placeholder-black/40 focus:outline-none rounded-lg ring-0 focus:ring-2 focus:ring-[var(--accent)]"
                   />
                   <label
                     htmlFor="hero-email"
@@ -136,10 +138,9 @@ export default function Hero() {
                   </label>
                 </div>
 
-                {/* Slimmer CTA button */}
                 <button
                   type="submit"
-                  className="h-11 px-4 text-[14px] font-semibold rounded-lg text-[var(--btn-contrast)] bg-[var(--brand)] hover:brightness-110 transition whitespace-nowrap"
+                  className="h-11 px-4 text-[14px] font-semibold rounded-lg text-[var(--btn-contrast)] bg-[var(--brand)] hover:brightness-110 transition whitespace-nowrap w-full sm:w-auto"
                 >
                   Sign Up for Quizzify
                 </button>
@@ -147,17 +148,17 @@ export default function Hero() {
             </form>
           </div>
 
-          {/* Mascot */}
+          {/* Right: mascot */}
           <div className="relative flex justify-center md:justify-end">
             <Image
-              src="/hero/mascot.png"
+              src="/hero/mascot.svg"
               alt="Quizzify mascot"
               priority
               width={1000}
               height={1000}
-              sizes="(min-width:1280px) 40vw, (min-width:768px) 45vw, 80vw"
+              sizes="(min-width:1280px) 40vw, (min-width:768px) 42vw, 80vw"
               className="h-auto select-none pointer-events-none"
-              style={{ width: "clamp(320px, 40vw, 700px)" }}
+              style={{ width: "min(700px, 42vw)" }}
             />
           </div>
         </div>
@@ -165,12 +166,11 @@ export default function Hero() {
 
       <div className="absolute inset-x-0 bottom-0 h-px bg-white/30" />
 
-      {/* Brand tokens */}
       <style jsx global>{`
         :root {
-          --brand: #4262ff;        /* primary brand */
-          --accent: #a8b1ff;       /* active/focus accent */
-          --btn-contrast: #ffffff; /* text on brand button */
+          --brand: #4262ff;
+          --accent: #a8b1ff;
+          --btn-contrast: #ffffff;
         }
       `}</style>
     </section>

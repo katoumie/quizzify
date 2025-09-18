@@ -8,6 +8,8 @@ import { usePathname, useRouter } from "next/navigation";
 import NotificationsPanel from "@/components/NotificationsPanel";
 
 const SESSION_KEY = "qz_auth";
+const SIDEBAR_W = 240;         // fixed sidebar width
+const OVERLAY_GAP = 12;        // small gap after 240px (and on the right side too)
 
 type AvatarObj = { kind: "builtin" | "upload"; src: string };
 type Avatar = string | AvatarObj | null | undefined;
@@ -46,6 +48,24 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const [searchOpen, setSearchOpen] = useState(false);
   const expandedRef = useRef<HTMLInputElement | null>(null);
   const compactRef = useRef<HTMLInputElement | null>(null);
+  const searchWrapRef = useRef<HTMLDivElement | null>(null);
+  const [searchTop, setSearchTop] = useState<number>(0);
+
+  function computeTopFromWrap() {
+    const wrap = searchWrapRef.current;
+    if (!wrap) return 0;
+    const rect = wrap.getBoundingClientRect();
+    return Math.round(rect.top);
+  }
+
+  function openOverlayFromCompact_NoAnim() {
+    setSearchTop(computeTopFromWrap());
+    setSearchOpen(true);
+    requestAnimationFrame(() => {
+      expandedRef.current?.focus();
+      expandedRef.current?.select();
+    });
+  }
 
   // session bootstrap
   useEffect(() => {
@@ -86,55 +106,68 @@ export default function AppShell({ children }: { children: ReactNode }) {
     };
   }, [router]);
 
-  // close menus on outside/Esc
+  // close menus on outside/Esc (and collapse search-on-click)
   useEffect(() => {
     const onDocClick = (e: MouseEvent) => {
       const t = e.target as Node;
       if (menuOpen && !(menuRef.current?.contains(t) || btnRef.current?.contains(t))) setMenuOpen(false);
       if (createOpen && !(createRef.current?.contains(t) || createBtnRef.current?.contains(t))) setCreateOpen(false);
+      if (searchOpen && !searchWrapRef.current?.contains(t)) setSearchOpen(false);
     };
+
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         setMenuOpen(false);
         setCreateOpen(false);
         setSearchOpen(false);
+        return;
+      }
+
+      // Press "/" to focus search unless typing in a field
+      if (e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        const tgt = e.target as HTMLElement | null;
+        const typing =
+          !!tgt &&
+          (tgt.tagName === "INPUT" ||
+            tgt.tagName === "TEXTAREA" ||
+            (tgt as HTMLElement).isContentEditable);
+
+        if (!typing) {
+          e.preventDefault();
+          if (!searchOpen) {
+            openOverlayFromCompact_NoAnim();
+          } else {
+            requestAnimationFrame(() => {
+              expandedRef.current?.focus();
+              expandedRef.current?.select();
+            });
+          }
+        }
       }
     };
+
     document.addEventListener("mousedown", onDocClick);
     document.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("mousedown", onDocClick);
       document.removeEventListener("keydown", onKey);
     };
-  }, [menuOpen, createOpen]);
+  }, [menuOpen, createOpen, searchOpen]);
 
-  // "/" hotkey: open expanded search
+  // keep the stretching search anchored while open
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey) return;
-      const target = e.target as HTMLElement | null;
-      const tag = target?.tagName?.toLowerCase();
-      const isEditable =
-        !!target &&
-        ((target as HTMLElement).isContentEditable || tag === "input" || tag === "textarea" || tag === "select");
-      if (isEditable) return;
-      e.preventDefault();
-      setSearchOpen(true);
-      // focus expanded after paint
-      setTimeout(() => {
-        expandedRef.current?.focus();
-        expandedRef.current?.select();
-      }, 0);
+    if (!searchOpen) return;
+    const onWinChange = () => {
+      setSearchTop(computeTopFromWrap());
     };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, []);
-
-  // focus expanded on open if triggered by click/focus
-  useEffect(() => {
-    if (searchOpen) {
-      setTimeout(() => expandedRef.current?.focus(), 0);
-    }
+    window.addEventListener("resize", onWinChange);
+    window.addEventListener("scroll", onWinChange, { passive: true });
+    const t = setTimeout(onWinChange, 50);
+    return () => {
+      window.removeEventListener("resize", onWinChange);
+      window.removeEventListener("scroll", onWinChange);
+      clearTimeout(t);
+    };
   }, [searchOpen]);
 
   const handleLogout = () => {
@@ -148,6 +181,12 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const onCreateFolder = () => {
     console.log("Create folder clicked");
     setCreateOpen(false);
+  };
+
+  const onSetStatus = () => {
+    // TODO: open a "Set status" sheet/modal
+    console.log("Open Set Status modal");
+    setMenuOpen(false);
   };
 
   const pageTitle = useMemo(() => {
@@ -171,15 +210,15 @@ export default function AppShell({ children }: { children: ReactNode }) {
         <div className="h-[60px] px-4 flex items-center justify-between gap-3">
           {/* Left cluster: logo + page title */}
           <div className="flex items-center gap-3">
-            <Link href="/main" aria-label="Quizzify home" className="flex items-center gap-4 no-underline">
+            <Link href="/main" aria-label="Quizzify home" className="flex items-center gap-3 no-underline">
               <Image
-                src="/logo-q.png"
+                src="/logo-q.svg"
                 alt="Quizzify"
-                width={32}
-                height={32}
+                width={24}
+                height={24}
                 className="rounded-full ring-1 ring-white/10"
               />
-              <span className="text-sm md:text-base font-semibold text-white/80">
+              <span className="text-[13px] md:text-sm font-semibold text-white">
                 {pageTitle}
               </span>
             </Link>
@@ -187,22 +226,35 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
           {/* Right cluster: Search + Create + Profile */}
           <div className="flex items-center gap-3">
-            {/* Compact search (smaller height, inner focus ring, custom clear) */}
+            {/* Compact search that stretches left when focused */}
             <form
-              action="/search"
-              className="hidden md:block w-[320px]"
-              onSubmit={(e) => {
-                if (!q.trim()) e.preventDefault();
-              }}
+              className="w-[260px] hidden md:block"
+              onSubmit={(e) => { if (!q.trim()) e.preventDefault(); }}
             >
               <label htmlFor="site-search" className="sr-only">Search</label>
+
+              {/* Wrapper becomes fixed while searchOpen === true */}
               <div
-                className="relative group"
-                onFocus={() => setSearchOpen(true)}
+                ref={searchWrapRef}
+                className={[
+                  "group",
+                  searchOpen ? "fixed z-[60]" : "relative",
+                ].join(" ")}
+                style={
+                  searchOpen
+                    ? { left: SIDEBAR_W + OVERLAY_GAP, right: OVERLAY_GAP, top: searchTop }
+                    : undefined
+                }
+                onFocus={() => {
+                  if (!searchOpen) openOverlayFromCompact_NoAnim();
+                }}
               >
-                <SearchIcon className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-white/70 group-focus-within:text-white" />
+                <SearchIcon className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-white/70 group-focus-within:text-white" />
                 <input
-                  ref={compactRef}
+                  ref={(el) => {
+                    compactRef.current = el;
+                    expandedRef.current = el; // bind both for smooth focus/selection
+                  }}
                   id="site-search"
                   name="q"
                   type="search"
@@ -211,16 +263,27 @@ export default function AppShell({ children }: { children: ReactNode }) {
                   placeholder="Type / to search"
                   autoComplete="off"
                   className={[
-                    "w-full h-9 rounded-xl text-white placeholder-white/70 pl-9 pr-9 text-sm",
-                    "ring-1 ring-white/10",                   // subtle outer line (idle)
-                    "focus:outline-none focus:ring-1",        // remove outer glow/offset
-                    "focus:ring-white/0",                     // kill outer ring color
-                    "focus:[box-shadow:inset_0_0_0_2px_rgba(160,167,189,0.45)]", // inner faint gray ring
-                    "shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]",
+                    "no-native-clear",
+                    "w-full h-8 rounded-md text-white placeholder-white/60 pl-8 pr-8 text-[13px]",
+                    "ring-1 ring-white/12",
+                    // Focused border color -> #180733
+                    "group-focus-within:ring-[#a8b1ff]",
+                    // subtle inner top highlight
+                    "shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]",
+                    "focus:outline-none",
                   ].join(" ")}
-                  style={{ backgroundColor: "rgba(255,255,255,0.08)" }}
+                  style={{ backgroundColor: "#18062e" }}
                 />
-                {/* Clear button (shows only when there's a query) */}
+                {/* Keycap "/" when empty and not expanded */}
+                {!q && !searchOpen && (
+                  <kbd
+                    className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 h-6 min-w-[22px] px-1 grid place-items-center rounded-[6px] text-[11px] text-white/80 ring-1 ring-white/12"
+                    style={{ backgroundColor: "rgba(255,255,255,0.04)" }}
+                  >
+                    /
+                  </kbd>
+                )}
+                {/* Custom clear */}
                 {q && (
                   <button
                     type="button"
@@ -229,25 +292,18 @@ export default function AppShell({ children }: { children: ReactNode }) {
                       setQ("");
                       compactRef.current?.focus();
                     }}
-                    className="absolute right-1.5 top-1/2 -translate-y-1/2 h-6 w-6 grid place-items-center rounded-full ring-1 ring-white/15 hover:brightness-110"
-                    style={{ backgroundColor: "rgba(160,167,189,0.35)" }}
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 inline-flex items-center justify-center h-4 w-4 rounded-full ring-1 ring-white/20 hover:ring-white/30"
+                    style={{ backgroundColor: "#8a8f98" }}
                   >
-                    <SvgFileIcon src="/icons/cancel_24.svg" className="h-3.5 w-3.5 text-white/90" />
+                    <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
+                      <path d="M2 2 L10 10 M10 2 L2 10" stroke="#18062e" strokeWidth="2" strokeLinecap="round" />
+                    </svg>
                   </button>
-                )}
-                {/* Shortcut hint when empty */}
-                {!q && (
-                  <kbd
-                    className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 h-6 min-w-[22px] px-1 grid place-items-center rounded-md text-[11px] text-white/80 ring-1 ring-white/15"
-                    style={{ backgroundColor: "rgba(255,255,255,0.06)" }}
-                  >
-                    /
-                  </kbd>
                 )}
               </div>
             </form>
 
-            {/* Create dropdown trigger */}
+            {/* Create button — keycap style (plus + caret) */}
             <div className="relative">
               <button
                 ref={createBtnRef}
@@ -256,10 +312,16 @@ export default function AppShell({ children }: { children: ReactNode }) {
                 aria-haspopup="menu"
                 aria-expanded={createOpen}
                 aria-label="Open create menu"
-                className="h-8 w-8 grid place-items-center rounded-full hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)] focus-visible:ring-offset-2"
-                style={{ backgroundColor: "#4262ff" }}
+                className={[
+                  "h-8 px-2.5 inline-flex items-center gap-1.5 rounded-[6px]",
+                  "text-white/90 hover:text-white",
+                  "focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)] focus-visible:ring-offset-2",
+                  "ring-1 ring-white/12 hover:ring-white/20",
+                ].join(" ")}
+                style={{ backgroundColor: "#18062e" }}
               >
                 <SvgFileIcon src="/icons/add_24.svg" className="h-[14px] w-[14px]" />
+                <CaretDownIcon className="h-3.5 w-3.5 text-white/80" />
               </button>
 
               {/* Create dropdown */}
@@ -267,7 +329,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
                 ref={createRef}
                 role="menu"
                 aria-label="Create menu"
-                className={`absolute right-0 mt-2 w-52 overflow-hidden rounded-2xl border border-white/10 bg-[var(--bg)] shadow-lg transition ${
+                className={`absolute right-0 mt-2 w-52 overflow-hidden rounded-lg border border-white/15 bg=[var(--bg)] shadow-lg transition ${
                   createOpen ? "opacity-100 scale-100" : "pointer-events-none opacity-0 scale-95"
                 }`}
               >
@@ -275,7 +337,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
                   <Link
                     href="/create"
                     role="menuitem"
-                    className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold text-white/90 hover:bg-white/10"
+                    className="flex items-center gap-3 rounded-md px-3 py-2.5 text-sm font-regular text-white hover:bg-white/10"
                     onClick={() => setCreateOpen(false)}
                   >
                     <SvgFileIcon src="/icons/add_24.svg" className="h-[18px] w-[18px] text-white" />
@@ -284,7 +346,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
                   <button
                     role="menuitem"
                     onClick={onCreateFolder}
-                    className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold text-white/90 hover:bg-white/10 text-left"
+                    className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-sm font-regular text-white hover:bg-white/10 text-left"
                   >
                     <SvgFileIcon src="/icons/folder_icon.svg" className="h-[18px] w-[18px] text-white" />
                     <span>Create folder</span>
@@ -308,7 +370,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={avatarSrc} alt="Your avatar" className="h-8 w-8 rounded-full object-cover" />
                 ) : (
-                  <div className="h-8 w-8 rounded-full bg-white/10 grid place-items-center text-white/90 text-sm font-semibold">
+                  <div className="h-8 w-8 rounded-full bg-white/10 grid place-items-center text-white text-sm font-semibold">
                     {initial}
                   </div>
                 )}
@@ -319,107 +381,85 @@ export default function AppShell({ children }: { children: ReactNode }) {
                 ref={menuRef}
                 role="menu"
                 aria-label="User menu"
-                className={`absolute right-0 mt-2 w-72 overflow-hidden rounded-2xl border border-white/10 bg-[var(--bg)] shadow-lg transition ${
+                className={`absolute right-0 mt-2 w-72 overflow-hidden rounded-lg border border-white/15 bg-[var(--bg)] shadow-lg transition ${
                   menuOpen ? "opacity-100 scale-100" : "pointer-events-none opacity-0 scale-95"
                 }`}
               >
+                {/* Header */}
                 <MenuHeader avatarSrc={avatarSrc} initial={initial} firstName={firstName} email={email} />
-                <div className="border-t border-white/10" />
+
+                {/* Set status */}
+                <MenuRow asButton onClick={onSetStatus} iconSrc="/icons/status_24.svg" label="Set status" />
+
+                <div className="mx-2 my-2 h-px bg-white/15" />
+
+                {/* Profile + Achievements */}
                 <div className="py-1">
                   <MenuRow href={profileHref} iconSrc="/icons/profile_24.svg" label="Profile" />
                   <MenuRow href="/achievements" iconSrc="/icons/trophy_24.svg" label="Achievements" />
+                </div>
+
+                <div className="mx-2 my-2 h-px bg-white/15" />
+
+                {/* Settings + Help */}
+                <div className="py-1">
                   <MenuRow href="/settings" iconSrc="/icons/settings_24.svg" label="Settings" />
-                </div>
-                <div className="border-t border-white/10" />
-                <div className="py-1">
-                  <MenuRow asButton onClick={handleLogout} iconSrc="/icons/logout_24.svg" label="Log out" danger />
-                </div>
-                <div className="border-t border-white/10" />
-                <div className="py-1">
                   <MenuRow href="/help" iconSrc="/icons/help_24.svg" label="Help and feedback" />
                 </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
 
-      {/* ===== Desktop layout: fixed left rail + content to the right ===== */}
-      <div className="hidden md:block">
-        <aside
-          id="app-sidebar"
-          className="fixed left-0 top-[61px] z-30 h-[calc(109vh-70px)] w-[260px] px-2 pt-2 border-r border-white/15"
-          style={{ background: "var(--sidebar-bg)" }}
-        >
-          <SidebarExpanded
-            isActive={(href) => isActive(href)}
-            onNotifications={() => window.dispatchEvent(new CustomEvent("qz:open-notifs"))}
-          />
-        </aside>
+                <div className="mx-2 my-2 h-px bg-white/15" />
 
-        <main className="md:pl-[260px] px-4 py-6 transition-[padding] duration-300">
-          <div className="mx-auto max-w-[1200px]">{children}</div>
-        </main>
-      </div>
-
-      {/* ===== Expanded search overlay (card + dim/blur) ===== */}
-      {searchOpen && (
-        <div className="fixed inset-0 z-[60]">
-          {/* Scrim with mild blur */}
-          <div
-            className="absolute inset-0 bg-black/40 backdrop-blur-[2px]"
-            onClick={() => setSearchOpen(false)}
-          />
-          {/* Floating search card (extends to the left) */}
-          <div
-            className="absolute left-3 right-3 md:left-3 md:right-3 top-2"
-          >
-            <div className="mx-auto max-w-[1600px] rounded-2xl border border-white/15 shadow-2xl"
-                 style={{ background: "var(--bg)" }}>
-              <div className="p-3 md:p-4">
-                <div className="relative">
-                  <SearchIcon className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-white/70" />
-                  <input
-                    ref={expandedRef}
-                    id="site-search-expanded"
-                    name="q"
-                    value={q}
-                    onChange={(e) => setQ(e.target.value)}
-                    placeholder="Search sets, folders, questions…"
-                    className={[
-                      "w-full h-12 rounded-xl text-white placeholder-white/70 pl-10 pr-10 text-[15px]",
-                      "ring-1 ring-white/10",
-                      "focus:outline-none focus:ring-1 focus:ring-white/0",
-                      "focus:[box-shadow:inset_0_0_0_2px_rgba(160,167,189,0.45)]",
-                      "shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]",
-                    ].join(" ")}
-                    style={{ backgroundColor: "rgba(255,255,255,0.08)" }}
-                    autoFocus
+                {/* Sign out */}
+                <div className="py-1">
+                  <MenuRow
+                    asButton
+                    onClick={handleLogout}
+                    iconSrc="/icons/logout_24.svg"
+                    label="Sign out"
+                    danger
+                    className="mb-2"
                   />
-                  {q && (
-                    <button
-                      type="button"
-                      aria-label="Clear"
-                      onClick={() => {
-                        setQ("");
-                        expandedRef.current?.focus();
-                      }}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 h-7 w-7 grid place-items-center rounded-full ring-1 ring-white/15 hover:brightness-110"
-                      style={{ backgroundColor: "rgba(160,167,189,0.35)" }}
-                    >
-                      <SvgFileIcon src="/icons/cancel_24.svg" className="h-4 w-4 text-white/90" />
-                    </button>
-                  )}
                 </div>
-                {/* Results area placeholder (optional) */}
-                {/* <div className="mt-3 text-white/70 text-sm">Recent searches…</div> */}
               </div>
             </div>
           </div>
         </div>
-      )}
+      </div>
+
+      {/* ===== Layout: sidebar always visible ===== */}
+      <aside
+        id="app-sidebar"
+        className="fixed left-0 top-[61px] z-30 h-[calc(109vh-70px)] w-[240px] px-2 pt-2 border-r border-white/15"
+        style={{ background: "var(--sidebar-bg)" }}
+      >
+        <SidebarExpanded
+          isActive={(href) => isActive(href)}
+          onNotifications={() => window.dispatchEvent(new CustomEvent("qz:open-notifs"))}
+        />
+      </aside>
+
+      <main className="pl-[260px] px-4 py-6 transition-[padding] duration-300">
+        <div className="mx-auto max-w-[1200px]">{children}</div>
+      </main>
 
       <NotificationsPanel />
+
+      {/* Hide native "x" on type=search (keep only our custom clear) */}
+      <style jsx global>{`
+        input.no-native-clear::-webkit-search-cancel-button {
+          -webkit-appearance: none;
+          appearance: none;
+          display: none;
+        }
+        input.no-native-clear::-webkit-search-decoration {
+          -webkit-appearance: none;
+        }
+        input.no-native-clear::-ms-clear {
+          display: none;
+          width: 0;
+          height: 0;
+        }
+      `}</style>
     </div>
   );
 }
@@ -433,14 +473,14 @@ function MenuHeader({
     <div className="flex items-center gap-3 px-4 py-3">
       {avatarSrc ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={avatarSrc} alt="" className="h-10 w-10 rounded-full object-cover" />
+        <img src={avatarSrc} alt="" className="h-8 w-8 rounded-full object-cover" />
       ) : (
-        <div className="h-10 w-10 rounded-full bg-white/10 grid place-items-center text-white/90 font-semibold">
+        <div className="h-8 w-8 rounded-full bg-white/10 grid place-items-center text-white font-regular">
           {initial}
         </div>
       )}
       <div className="min-w-0">
-        <div className="truncate text-sm font-semibold">{firstName}</div>
+        <div className="truncate text-sm font-bold">{firstName}</div>
         <div className="truncate text-xs">{email}</div>
       </div>
     </div>
@@ -454,6 +494,7 @@ function MenuRow({
   iconSrc,
   asButton = false,
   danger = false,
+  className = "",
 }: {
   href?: string;
   onClick?: () => void;
@@ -461,37 +502,42 @@ function MenuRow({
   iconSrc: string;
   asButton?: boolean;
   danger?: boolean;
+  className?: string;
 }) {
-  const base = "flex items-center gap-3 px-4 py-2.5 text-sm font-semibold rounded-xl transition";
-  const colors = danger ? "text-red-300 hover:bg-red-500/10" : "text-white hover:bg-white/10";
-  const content = (
-    <>
-      <SvgFileIcon src={iconSrc} className="h-[18px] w-[18px] text-white" />
-      <span>{label}</span>
-    </>
-  );
-  if (asButton || !href) {
-    return (
-      <button type="button" onClick={onClick} className={`${base} ${colors} w-full text-left`}>
-        {content}
-      </button>
-    );
-  }
+  const Comp: any = asButton || !href ? "button" : Link;
+
+  // Row spans full width; content nudged right with pl-4 (keep highlight width unchanged).
+  const base =
+    "relative w-full flex items-center gap-2 pl-4 pr-3 py-2 text-sm rounded-md text-left transition";
+
+  const text = danger ? "text-red-300" : "text-white";
+
+  // Inset hover stays aligned with your dividers (both ends = mx-2)
+  const insetHover =
+    'before:content-[""] before:absolute before:inset-y-0 before:left-2 before:right-2 before:rounded-md before:pointer-events-none ' +
+    (danger
+      ? "hover:before:bg-red-500/10 focus-visible:before:bg-red-500/10"
+      : "hover:before:bg-white/10 focus-visible:before:bg-white/10");
+
   return (
-    <Link href={href} className={`${base} ${colors}`}>
-      {content}
-    </Link>
+    <Comp
+      {...(href ? { href } : {})}
+      type={asButton ? "button" : undefined}
+      onClick={onClick}
+      className={`${base} ${text} ${insetHover} ${className}`}
+    >
+      <SvgFileIcon src={iconSrc} className="h-[18px] w-[18px]" />
+      <span>{label}</span>
+    </Comp>
   );
 }
 
 function deriveFirstName(email: string): string {
-  if (!email) return "User";
-  const beforeAt = email.split("@")[0] || "user";
+  const beforeAt = (email ?? "").split("@")[0] || "user";
   const token = beforeAt.split(/[._-]/)[0] || "user";
   return token.charAt(0).toUpperCase() + token.slice(1);
 }
 
-/* ---- Sidebar (expanded) ---- */
 function SidebarExpanded({
   isActive,
   onNotifications,
@@ -500,8 +546,8 @@ function SidebarExpanded({
   onNotifications: () => void;
 }) {
   return (
-    <div className="text-white pr-3">
-      <nav className="space-y-2">
+    <div className="text-white">
+      <nav className="space-y-1.5">
         <SideItem href="/main" icon={<SvgFileIcon src="/icons/home_24.svg" className="h-5 w-5" />} label="Home" active={isActive("/main")} />
         <SideItem href="/library" icon={<SvgFileIcon src="/icons/folder_icon.svg" className="h-5 w-5" />} label="Library" active={isActive("/library")} />
         <SideItem href="/learn" icon={<SvgFileIcon src="/icons/learn_24.svg" className="h-5 w-5" />} label="Learn" active={isActive("/learn")} />
@@ -509,15 +555,13 @@ function SidebarExpanded({
         <SideItem href="/explore" icon={<SvgFileIcon src="/icons/search_24.svg" className="h-5 w-5" />} label="Explore" active={isActive("/explore")} />
         <SideItemButton onClick={onNotifications} icon={<SvgFileIcon src="/icons/notifications_24.svg" className="h-5 w-5" />} label="Notifications" />
       </nav>
-
-      <hr className="my-3 border-white/10" />
+      <div className="mx-2 my-2 h-px bg-white/15" />
       <div className="px-3 text-xs uppercase tracking-wide text-white/50 mb-2">Your folders</div>
       <SideItemButton icon={<SvgFileIcon src="/icons/add_24.svg" className="h-4 w-4" />} label="New folder" onClick={() => {}} />
     </div>
   );
 }
 
-/* Expanded side item (link) */
 function SideItem({
   href,
   icon,
@@ -534,14 +578,14 @@ function SideItem({
   return (
     <Link
       href={href}
-      className={`group flex items-center gap-3 h-9 px-3 rounded-lg ${
+      className={`group w-full flex items-center gap-2 pl-4 pr-3 py-2 rounded-md overflow-hidden ${
         active
-          ? "bg-[#2a1a63] text-[#a8b1ff]"
-          : "hover:bg-white/10 hover:ring-1 hover:ring-white/10 text-white/90"
+          ? "bg-[#24114d] text-white"
+          : "text-white hover:bg-white/10 hover:ring-1 hover:ring-white/10"
       }`}
     >
-      <span className="shrink-0 flex h-5 w-5 items-center justify-center">{icon}</span>
-      <span className="text-sm font-semibold leading-none">{label}</span>
+      <span className="shrink-0 flex h-[18px] w-[18px] items-center justify-center">{icon}</span>
+      <span className="text-sm font-regular leading-none">{label}</span>
       {badge && (
         <span className="ml-auto inline-flex h-5 min-w-[20px] rounded-full bg-red-500 text-[11px] px-1 justify-center items-center">
           {badge}
@@ -551,7 +595,6 @@ function SideItem({
   );
 }
 
-/* Expanded side item (button) */
 function SideItemButton({
   icon,
   label,
@@ -567,10 +610,10 @@ function SideItemButton({
     <button
       type="button"
       onClick={onClick}
-      className="group flex w-full items-center gap-3 h-9 px-3 rounded-lg hover:bg-white/10 hover:ring-1 hover:ring-white/10 text-white/90"
+      className="group w-full flex items-center gap-2 pl-4 pr-3 py-2 rounded-md overflow-hidden text-white hover:bg-white/10 hover:ring-1 hover:ring-white/10"
     >
-      <span className="shrink-0 flex h-5 w-5 items-center justify-center">{icon}</span>
-      <span className="text-sm font-semibold leading-none">{label}</span>
+      <span className="shrink-0 flex h-[18px] w-[18px] items-center justify-center">{icon}</span>
+      <span className="text-sm font-regular leading-none">{label}</span>
       {badge && (
         <span className="ml-auto inline-flex h-5 min-w-[20px] rounded-full bg-red-500 text-[11px] px-1 justify-center items-center">
           {badge}
@@ -580,7 +623,6 @@ function SideItemButton({
   );
 }
 
-/* Masked SVG icon helper (tints via currentColor) */
 function SvgFileIcon({ src, className = "" }: { src: string; className?: string }) {
   const imageUrl = `url(${src})`;
   return (
@@ -602,12 +644,19 @@ function SvgFileIcon({ src, className = "" }: { src: string; className?: string 
   );
 }
 
-/* Small inline search icon */
 function SearchIcon({ className = "" }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" className={`block ${className}`} fill="none" stroke="currentColor" strokeWidth={1.8} aria-hidden="true">
       <circle cx="11" cy="11" r="7" />
       <path d="M20 20l-3.2-3.2" />
+    </svg>
+  );
+}
+
+function CaretDownIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={`block ${className}`} fill="currentColor" aria-hidden="true">
+      <path d="M7 10l5 5 5-5H7z" />
     </svg>
   );
 }
