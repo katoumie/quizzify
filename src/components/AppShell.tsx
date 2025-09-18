@@ -9,7 +9,7 @@ import NotificationsPanel from "@/components/NotificationsPanel";
 
 const SESSION_KEY = "qz_auth";
 const SIDEBAR_W = 240;         // fixed sidebar width
-const OVERLAY_GAP = 12;        // small gap after 240px (and on the right side too)
+const OVERLAY_GAP = 12;        // small left gap after the sidebar
 
 type AvatarObj = { kind: "builtin" | "upload"; src: string };
 type Avatar = string | AvatarObj | null | undefined;
@@ -50,6 +50,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const compactRef = useRef<HTMLInputElement | null>(null);
   const searchWrapRef = useRef<HTMLDivElement | null>(null);
   const [searchTop, setSearchTop] = useState<number>(0);
+  const [overlayRight, setOverlayRight] = useState<number>(12); // dynamic Gap X (RIGHT ONLY)
 
   function computeTopFromWrap() {
     const wrap = searchWrapRef.current;
@@ -58,8 +59,17 @@ export default function AppShell({ children }: { children: ReactNode }) {
     return Math.round(rect.top);
   }
 
+  // measure Gap X from compact input's right edge to viewport right
+  function computeRightGapFromCompact() {
+    const el = compactRef.current;
+    if (!el) return 12;
+    const rect = el.getBoundingClientRect();
+    return Math.max(0, Math.round(window.innerWidth - rect.right));
+  }
+
   function openOverlayFromCompact_NoAnim() {
     setSearchTop(computeTopFromWrap());
+    setOverlayRight(computeRightGapFromCompact()); // right gap measured on open
     setSearchOpen(true);
     requestAnimationFrame(() => {
       expandedRef.current?.focus();
@@ -106,7 +116,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
     };
   }, [router]);
 
-  // close menus on outside/Esc (and collapse search-on-click)
+  // outside click / Esc / "/" hotkey
   useEffect(() => {
     const onDocClick = (e: MouseEvent) => {
       const t = e.target as Node;
@@ -123,7 +133,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         return;
       }
 
-      // Press "/" to focus search unless typing in a field
+      // "/" to focus search unless typing
       if (e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey) {
         const tgt = e.target as HTMLElement | null;
         const typing =
@@ -154,11 +164,12 @@ export default function AppShell({ children }: { children: ReactNode }) {
     };
   }, [menuOpen, createOpen, searchOpen]);
 
-  // keep the stretching search anchored while open
+  // keep stretched search anchored while open
   useEffect(() => {
     if (!searchOpen) return;
     const onWinChange = () => {
       setSearchTop(computeTopFromWrap());
+      setOverlayRight(computeRightGapFromCompact()); // keep right gap live
     };
     window.addEventListener("resize", onWinChange);
     window.addEventListener("scroll", onWinChange, { passive: true });
@@ -184,7 +195,6 @@ export default function AppShell({ children }: { children: ReactNode }) {
   };
 
   const onSetStatus = () => {
-    // TODO: open a "Set status" sheet/modal
     console.log("Open Set Status modal");
     setMenuOpen(false);
   };
@@ -236,25 +246,17 @@ export default function AppShell({ children }: { children: ReactNode }) {
               {/* Wrapper becomes fixed while searchOpen === true */}
               <div
                 ref={searchWrapRef}
-                className={[
-                  "group",
-                  searchOpen ? "fixed z-[60]" : "relative",
-                ].join(" ")}
+                className={["group", searchOpen ? "fixed z-[60]" : "relative"].join(" ")}
                 style={
                   searchOpen
-                    ? { left: SIDEBAR_W + OVERLAY_GAP, right: OVERLAY_GAP, top: searchTop }
+                    ? { left: SIDEBAR_W + OVERLAY_GAP, right: overlayRight, top: searchTop }
                     : undefined
                 }
-                onFocus={() => {
-                  if (!searchOpen) openOverlayFromCompact_NoAnim();
-                }}
+                onFocus={() => { if (!searchOpen) openOverlayFromCompact_NoAnim(); }}
               >
                 <SearchIcon className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-white/70 group-focus-within:text-white" />
                 <input
-                  ref={(el) => {
-                    compactRef.current = el;
-                    expandedRef.current = el; // bind both for smooth focus/selection
-                  }}
+                  ref={(el) => { compactRef.current = el; expandedRef.current = el; }}
                   id="site-search"
                   name="q"
                   type="search"
@@ -266,9 +268,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
                     "no-native-clear",
                     "w-full h-8 rounded-md text-white placeholder-white/60 pl-8 pr-8 text-[13px]",
                     "ring-1 ring-white/12",
-                    // Focused border color -> #180733
-                    "group-focus-within:ring-[#a8b1ff]",
-                    // subtle inner top highlight
+                    "group-focus-within:ring-[#a8b1ff]/80", // brighter focus ring
                     "shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]",
                     "focus:outline-none",
                   ].join(" ")}
@@ -288,10 +288,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
                   <button
                     type="button"
                     aria-label="Clear"
-                    onClick={() => {
-                      setQ("");
-                      compactRef.current?.focus();
-                    }}
+                    onClick={() => { setQ(""); compactRef.current?.focus(); }}
                     className="absolute right-1.5 top-1/2 -translate-y-1/2 inline-flex items-center justify-center h-4 w-4 rounded-full ring-1 ring-white/20 hover:ring-white/30"
                     style={{ backgroundColor: "#8a8f98" }}
                   >
@@ -324,14 +321,15 @@ export default function AppShell({ children }: { children: ReactNode }) {
                 <CaretDownIcon className="h-3.5 w-3.5 text-white/80" />
               </button>
 
-              {/* Create dropdown */}
+              {/* Create dropdown (bg fix + z-index) */}
               <div
                 ref={createRef}
                 role="menu"
                 aria-label="Create menu"
-                className={`absolute right-0 mt-2 w-52 overflow-hidden rounded-lg border border-white/15 bg=[var(--bg)] shadow-lg transition ${
+                className={`absolute right-0 mt-2 w-52 overflow-hidden rounded-lg border border-white/15 bg-[var(--bg)] shadow-lg transition z-[70] ${
                   createOpen ? "opacity-100 scale-100" : "pointer-events-none opacity-0 scale-95"
                 }`}
+                style={{ backgroundColor: "var(--bg, #18062e)" }}
               >
                 <div className="p-2">
                   <Link
@@ -538,6 +536,28 @@ function deriveFirstName(email: string): string {
   return token.charAt(0).toUpperCase() + token.slice(1);
 }
 
+/* ========= Revamped Left Sidebar ========= */
+
+function SectionHeader({
+  children,
+  first = false,
+}: {
+  children: ReactNode;
+  first?: boolean;
+}) {
+  // First subtext is pushed down a bit, all subtexts are white, NOT all caps, and semibold
+  return (
+    <div className={`${first ? "mt-3" : "mt-4"} mb-2 px-3 text-sm font-semibold text-white`}>
+      {children}
+    </div>
+  );
+}
+
+function NavDivider() {
+  // Matches profile menu divider: 8px inset + top/bottom padding
+  return <div className="mx-[6px] my-2 h-px bg-white/15" />;
+}
+
 function SidebarExpanded({
   isActive,
   onNotifications,
@@ -547,17 +567,77 @@ function SidebarExpanded({
 }) {
   return (
     <div className="text-white">
+      {/* Group 1 */}
+      <SectionHeader first>Navigation</SectionHeader>
       <nav className="space-y-1.5">
-        <SideItem href="/main" icon={<SvgFileIcon src="/icons/home_24.svg" className="h-5 w-5" />} label="Home" active={isActive("/main")} />
-        <SideItem href="/library" icon={<SvgFileIcon src="/icons/folder_icon.svg" className="h-5 w-5" />} label="Library" active={isActive("/library")} />
-        <SideItem href="/learn" icon={<SvgFileIcon src="/icons/learn_24.svg" className="h-5 w-5" />} label="Learn" active={isActive("/learn")} />
-        <SideItem href="/flashcards" icon={<SvgFileIcon src="/icons/flashcards_24.svg" className="h-5 w-5" />} label="Flashcards" active={isActive("/flashcards")} />
-        <SideItem href="/explore" icon={<SvgFileIcon src="/icons/search_24.svg" className="h-5 w-5" />} label="Explore" active={isActive("/explore")} />
-        <SideItemButton onClick={onNotifications} icon={<SvgFileIcon src="/icons/notifications_24.svg" className="h-5 w-5" />} label="Notifications" />
+        <SideItem
+          href="/main"
+          icon={<SvgFileIcon src="/icons/home_24.svg" className="h-5 w-5" />}
+          label="Home"
+          active={isActive("/main")}
+        />
+        <SideItem
+          href="/library"
+          icon={<SvgFileIcon src="/icons/folder_icon.svg" className="h-5 w-5" />}
+          label="Library"
+          active={isActive("/library")}
+        />
+        <SideItem
+          href="/classes"
+          icon={<SvgFileIcon src="/icons/profile_24.svg" className="h-5 w-5" />}
+          label="Classes"
+          active={isActive("/classes")}
+        />
+        <SideItem
+          href="/explore"
+          icon={<SvgFileIcon src="/icons/search_24.svg" className="h-5 w-5" />}
+          label="Explore"
+          active={isActive("/explore")}
+        />
       </nav>
-      <div className="mx-2 my-2 h-px bg-white/15" />
-      <div className="px-3 text-xs uppercase tracking-wide text-white/50 mb-2">Your folders</div>
-      <SideItemButton icon={<SvgFileIcon src="/icons/add_24.svg" className="h-4 w-4" />} label="New folder" onClick={() => {}} />
+
+      <NavDivider />
+
+      {/* Group 2 */}
+      <SectionHeader>Study</SectionHeader>
+      <nav className="space-y-1.5">
+        <SideItem
+          href="/learn"
+          icon={<SvgFileIcon src="/icons/learn_24.svg" className="h-5 w-5" />}
+          label="Learn"
+          active={isActive("/learn")}
+        />
+        <SideItem
+          href="/flashcards"
+          icon={<SvgFileIcon src="/icons/flashcards_24.svg" className="h-5 w-5" />}
+          label="Flashcards"
+          active={isActive("/flashcards")}
+        />
+        <SideItem
+          href="/duels"
+          icon={<SvgFileIcon src="/icons/trophy_24.svg" className="h-5 w-5" />}
+          label="Duels"
+          active={isActive("/duels")}
+        />
+      </nav>
+
+      <NavDivider />
+
+      {/* Group 3 */}
+      <SectionHeader>Social</SectionHeader>
+      <nav className="space-y-1.5">
+        <SideItem
+          href="/friends"
+          icon={<SvgFileIcon src="/icons/profile_24.svg" className="h-5 w-5" />}
+          label="Friends"
+          active={isActive("/friends")}
+        />
+        <SideItemButton
+          onClick={onNotifications}
+          icon={<SvgFileIcon src="/icons/notifications_24.svg" className="h-5 w-5" />}
+          label="Notifications"
+        />
+      </nav>
     </div>
   );
 }
@@ -567,18 +647,17 @@ function SideItem({
   icon,
   label,
   active = false,
-  badge,
 }: {
   href: string;
-  icon: ReactNode;
+  icon: React.ReactNode;
   label: string;
   active?: boolean;
-  badge?: string;
 }) {
   return (
     <Link
       href={href}
-      className={`group w-full flex items-center gap-2 pl-4 pr-3 py-2 rounded-md overflow-hidden ${
+      // inset: 6px; no w-full so margins don’t overflow
+      className={`group mx-[0px] flex items-center gap-2 pl-4 pr-3 py-2 rounded-md overflow-hidden ${
         active
           ? "bg-[#24114d] text-white"
           : "text-white hover:bg-white/10 hover:ring-1 hover:ring-white/10"
@@ -586,39 +665,29 @@ function SideItem({
     >
       <span className="shrink-0 flex h-[18px] w-[18px] items-center justify-center">{icon}</span>
       <span className="text-sm font-regular leading-none">{label}</span>
-      {badge && (
-        <span className="ml-auto inline-flex h-5 min-w-[20px] rounded-full bg-red-500 text-[11px] px-1 justify-center items-center">
-          {badge}
-        </span>
-      )}
     </Link>
   );
 }
 
+
 function SideItemButton({
   icon,
   label,
-  badge,
   onClick,
 }: {
   icon: ReactNode;
   label: string;
-  badge?: string;
   onClick: () => void;
 }) {
+  // Button with same 8px inset; explicit width to account for margins
   return (
     <button
       type="button"
       onClick={onClick}
-      className="group w-full flex items-center gap-2 pl-4 pr-3 py-2 rounded-md overflow-hidden text-white hover:bg-white/10 hover:ring-1 hover:ring-white/10"
+      className="group mx-0 flex w-[calc(100%-16px)] items-center gap-2 pl-4 pr-3 py-2 rounded-md overflow-hidden text-white hover:bg-white/10 hover:ring-1 hover:ring-white/10"
     >
       <span className="shrink-0 flex h-[18px] w-[18px] items-center justify-center">{icon}</span>
       <span className="text-sm font-regular leading-none">{label}</span>
-      {badge && (
-        <span className="ml-auto inline-flex h-5 min-w-[20px] rounded-full bg-red-500 text-[11px] px-1 justify-center items-center">
-          {badge}
-        </span>
-      )}
     </button>
   );
 }
