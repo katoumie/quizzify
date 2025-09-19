@@ -12,7 +12,7 @@
   --hover-bg: rgba(255, 255, 255, 0.08);   /* generic hover */
   --bg-card: rgba(255, 255, 255, 0.05);    /* card bg on dark */
   --btn-contrast: #ffffff;                 /* text color on brand */
-  --sidebar-bg: #180733;
+  --sidebar-bg: #120526;
   /* Legacy aliases so your existing CSS keeps working */
   --background: var(--bg);
   --foreground: #f0f6fc;                   /* default text */

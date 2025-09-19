@@ -1,8 +1,8 @@
+// /src/app/sets/[id]/edit/page.tsx
 "use client";
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import AppShell from "@/components/AppShell";
 import SetForm, { type SetFormInitialData } from "@/components/SetForm";
 
 export default function EditSetPage() {
@@ -46,7 +46,7 @@ export default function EditSetPage() {
   }, [id]);
 
   return (
-    <AppShell>
+    <>
       {error ? (
         <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-6 text-red-200">
           {error}
@@ -58,6 +58,6 @@ export default function EditSetPage() {
       ) : (
         <SetForm mode="edit" initialData={data} />
       )}
-    </AppShell>
+    </>
   );
 }

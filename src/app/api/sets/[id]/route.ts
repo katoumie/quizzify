@@ -1,11 +1,14 @@
 // /src/app/api/sets/[id]/route.ts
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
 /** GET one set (with cards) */
-export async function GET(_req: Request, { params }: { params: { id: string } }) {
+export async function GET(
+  _req: NextRequest,
+  context: RouteContext<"/api/sets/[id]">
+) {
   try {
-    const id = params.id;
+    const { id } = await context.params;
     if (!id) return NextResponse.json({ error: "Missing id." }, { status: 400 });
 
     const set = await prisma.studySet.findUnique({
@@ -23,7 +26,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
             term: true,
             definition: true,
             position: true,
-            imageUrl: true, // 👈 include image URLs
+            imageUrl: true, // include image URLs
             createdAt: true,
           },
         },
@@ -39,12 +42,15 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 }
 
 /** PATCH update title/description/isPublic/cards (replace cards) */
-export async function PATCH(req: Request, { params }: { params: { id: string } }) {
+export async function PATCH(
+  req: NextRequest,
+  context: RouteContext<"/api/sets/[id]">
+) {
   try {
-    const id = params.id;
+    const { id } = await context.params;
     if (!id) return NextResponse.json({ error: "Missing id." }, { status: 400 });
 
-    const body = await req.json().catch(() => ({}));
+    const body = (await req.json().catch(() => ({}))) as any;
 
     const title =
       typeof body?.title === "string" ? body.title.trim() : undefined;
@@ -59,7 +65,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     const isPublic =
       typeof body?.isPublic === "boolean" ? body.isPublic : undefined;
 
-    const cards = Array.isArray(body?.cards) ? body.cards : undefined;
+    const cards = Array.isArray(body?.cards) ? (body.cards as any[]) : undefined;
 
     if (
       typeof title === "undefined" &&
@@ -72,6 +78,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
     const tx: any[] = [];
 
+    // If visibility possibly changes, read previous for tidy-up
     let prev: { isPublic: boolean; ownerId: string } | null = null;
     if (typeof isPublic !== "undefined") {
       prev = await prisma.studySet.findUnique({
@@ -98,12 +105,12 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     }
 
     if (cards) {
-      const clean = (cards as any[])
+      const clean = cards
         .map((c, i) => ({
           term: String(c?.term || "").trim(),
           definition: String(c?.definition || "").trim(),
           position: Number.isFinite(c?.position) ? Number(c.position) : i,
-          imageUrl: c?.imageUrl ? String(c.imageUrl) : null, // 👈
+          imageUrl: c?.imageUrl ? String(c.imageUrl) : null,
         }))
         .filter((c) => c.term || c.definition);
 
@@ -115,7 +122,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
             definition: c.definition,
             setId: id,
             position: c.position,
-            imageUrl: c.imageUrl, // 👈
+            imageUrl: c.imageUrl,
           })),
         })
       );
@@ -141,9 +148,12 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 }
 
 /** DELETE a set (delete cards first, then set) */
-export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
+export async function DELETE(
+  _req: NextRequest,
+  context: RouteContext<"/api/sets/[id]">
+) {
   try {
-    const id = params.id;
+    const { id } = await context.params;
     if (!id) return NextResponse.json({ error: "Missing id." }, { status: 400 });
 
     await prisma.$transaction([

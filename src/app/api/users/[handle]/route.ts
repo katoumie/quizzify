@@ -1,5 +1,5 @@
 // /src/app/api/users/[handle]/route.ts
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
 /**
@@ -9,23 +9,22 @@ import { prisma } from "@/lib/prisma";
  * - Returns public-safe profile info + a few recent public sets with like counts.
  */
 export async function GET(
-  _req: Request,
-  { params }: { params: { handle: string } }
+  _req: NextRequest,
+  context: RouteContext<"/api/users/[handle]">
 ) {
   try {
-    const raw = (params.handle || "").trim();
-    const handle = raw.startsWith("@") ? raw.slice(1) : raw;
+    const { handle: rawHandle } = await context.params;
+    const handle = (rawHandle || "").trim().replace(/^@/, "");
     if (!handle) {
       return NextResponse.json({ error: "Missing handle." }, { status: 400 });
     }
 
-    // 1) Try id lookup first
-    let user =
+    // 1) Try id lookup first, then username (case-insensitive)
+    const user =
       (await prisma.user.findUnique({
         where: { id: handle },
         select: { id: true, email: true, username: true, avatar: true, createdAt: true },
       })) ||
-      // 2) Fallback to username (case-insensitive)
       (await prisma.user.findFirst({
         where: { username: { equals: handle, mode: "insensitive" } },
         select: { id: true, email: true, username: true, avatar: true, createdAt: true },
@@ -51,17 +50,15 @@ export async function GET(
       },
     });
 
-    // Stats (simple, fast counts)
+    // Stats (simple counts)
     const [totalPublicSets, totalLikesReceived] = await Promise.all([
       prisma.studySet.count({ where: { ownerId: user.id, isPublic: true } }),
       prisma.like.count({ where: { set: { ownerId: user.id, isPublic: true } } }),
     ]);
 
-    // (Optional placeholders for future features)
     const stats = {
       totalPublicSets,
       totalLikesReceived,
-      // streak, calendar, classes will be added later
     };
 
     return NextResponse.json(

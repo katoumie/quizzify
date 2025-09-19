@@ -4,7 +4,8 @@
 import { useEffect, useRef, useState } from "react";
 import SearchIcon from "@/components/icons/SearchIcon";
 
-const SIDEBAR_W = 240;       // keep in-sync with layout
+// NOTE: sidebar width is now read from CSS var --sidebar-w (240px or 72px)
+// const SIDEBAR_W = 240;   // ⬅️ no longer used
 const OVERLAY_GAP = 12;      // small left gap after the sidebar
 const CLEAR_BG = "#8a8f98";  // clear button circle color (per spec)
 const INPUT_BG = "#18062e";  // input background (used for the "cutout" X)
@@ -147,8 +148,8 @@ export default function NavSearch() {
         style={
           searchOpen
             ? {
-                // expand the card beyond the compact input geometry
-                left: SIDEBAR_W + OVERLAY_GAP - CARD_HPAD,
+                // ✅ left uses CSS var so it auto-switches 240px ↔ 72px
+                left: `calc(var(--sidebar-w, 240px) + ${OVERLAY_GAP - CARD_HPAD}px)`,
                 right: Math.max(0, overlayRight - CARD_HPAD),
                 top: searchTop, // locked value computed on open
               }
@@ -220,9 +221,8 @@ export default function NavSearch() {
                 autoComplete="off"
                 className={[
                   "no-native-clear",
-                  // kept taller to look better, per your preference
                   "w-full h-9 rounded-md text-white placeholder-white/60 pl-10 pr-10 text-[13px]",
-                  // NOTE: your new ring settings
+                  // your ring choice
                   "ring-3 ring-white/12 focus:ring-[#a8b1ff]/80",
                   "shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]",
                   "focus:outline-none",
@@ -230,7 +230,7 @@ export default function NavSearch() {
                 style={{ backgroundColor: INPUT_BG }}
               />
 
-              {/* Clear button (expanded only) — EXACT as you specified */}
+              {/* Clear button (expanded only) — as specified */}
               {q && (
                 <button
                   type="button"
@@ -239,7 +239,6 @@ export default function NavSearch() {
                   className={[
                     "absolute right-6 top-1/2 -translate-y-1/2",
                     "inline-flex items-center justify-center",
-                    // size — tweak via --clear-size
                     "[--clear-size:15px] md:[--clear-size:15px]",
                     "h-[var(--clear-size)] w-[var(--clear-size)]",
                     "rounded-full",
@@ -264,10 +263,8 @@ export default function NavSearch() {
 
             {/* Results panel — fixed height for now */}
             <div className="overflow-auto" style={{ height: PANEL_H }}>
-              {/* Example section structure with end-to-end dividers */}
-              <div className="text-xs uppercase tracking-wide text-white/60 px-3 pt-3 pb-2">
-                Owners
-              </div>
+              {/* Example sections */}
+              <div className="text-xs uppercase tracking-wide text-white/60 px-3 pt-3 pb-2">Owners</div>
               <div className="divide-y divide-white/10">
                 <div className="px-3 py-2 text-white/90">—</div>
                 <div className="px-3 py-2 text-white/90">—</div>
@@ -275,9 +272,7 @@ export default function NavSearch() {
 
               <div className="border-t border-white/10 mt-2" />
 
-              <div className="text-xs uppercase tracking-wide text-white/60 px-3 pt-3 pb-2">
-                Repositories
-              </div>
+              <div className="text-xs uppercase tracking-wide text-white/60 px-3 pt-3 pb-2">Repositories</div>
               <div className="divide-y divide-white/10">
                 <div className="px-3 py-2 text-white/90">—</div>
                 <div className="px-3 py-2 text-white/90">—</div>

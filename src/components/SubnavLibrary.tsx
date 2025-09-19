@@ -19,6 +19,14 @@ const HILIGHT_H = 3;         // thickness in px
 const HILIGHT_OVERRUN = 6;   // left/right overshoot (px)
 const HILIGHT_OFFSET = 9;    // distance below label (px)
 
+/** Icons */
+const ICON_SIZE = 18;
+const ICONS = {
+  sets: "/icons/study_sets.svg",
+  notes: "/icons/magic_notes.svg",
+  folders: "/icons/folders.svg",
+} as const;
+
 export default function SubnavLibrary() {
   const search = useSearchParams();
   const active = (search.get("tab") || "sets") as "sets" | "notes" | "folders";
@@ -32,7 +40,8 @@ export default function SubnavLibrary() {
   return (
     <div
       className="absolute inset-y-0 flex items-end"
-      style={{ left: LEFT_OFFSET, right: RIGHT_SAFE }}
+      // left = sidebar width + content gap (20) - navbar padding (16) + your EXTRA_PUSH (16)
+      style={{ left: "calc(var(--sidebar-w) + 20px - 16px + 16px)", right: 380 }}
     >
       <nav className="h-full pb-[10px] flex items-end gap-6 text-sm text-white/80">
         {tabs.map((t) => {
@@ -41,20 +50,24 @@ export default function SubnavLibrary() {
             <Link
               key={t.key}
               href={`/library?tab=${t.key}`}
+              aria-current={isActive ? "page" : undefined}
               className={[
-                "relative block leading-none no-underline",
-                "hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/30 rounded",
-                "font-semibold",         // ⬅️ semibold tabs
+                "relative inline-flex items-center gap-2 leading-none no-underline rounded",
+                "hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/30",
+                "font-semibold",
                 isActive ? "text-white" : "",
               ].join(" ")}
               style={{ paddingTop: 6, paddingBottom: 4 }}
             >
-              {t.label}
+              <SvgIcon src={ICONS[t.key]} size={ICON_SIZE} />
+              <span>{t.label}</span>
+
               {isActive && (
                 <span
                   aria-hidden="true"
-                  className="absolute left-0 right-0 rounded-full bg-[#a8b1ff]"  // ⬅️ highlight color
+                  className="absolute left-0 right-0 rounded-full"
                   style={{
+                    backgroundColor: "#a8b1ff",
                     height: `${HILIGHT_H}px`,
                     left: `-${HILIGHT_OVERRUN}px`,
                     right: `-${HILIGHT_OVERRUN}px`,
@@ -67,5 +80,29 @@ export default function SubnavLibrary() {
         })}
       </nav>
     </div>
+  );
+}
+
+/** Masked SVG so icons inherit currentColor (GitHub-style) */
+function SvgIcon({ src, size }: { src: string; size: number }) {
+  const imageUrl = `url(${src})`;
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        width: size,
+        height: size,
+        WebkitMaskImage: imageUrl,
+        WebkitMaskRepeat: "no-repeat",
+        WebkitMaskPosition: "center",
+        WebkitMaskSize: "contain",
+        maskImage: imageUrl,
+        maskRepeat: "no-repeat",
+        maskPosition: "center",
+        maskSize: "contain",
+        backgroundColor: "currentColor",
+        display: "inline-block",
+      }}
+    />
   );
 }

@@ -2,7 +2,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import AppShell from "@/components/AppShell";
 
 const SESSION_KEY = "qz_auth";
 
@@ -168,7 +167,7 @@ export default function AchievementsPage() {
   const ICON = { base: "h-16 w-16", md: "md:h-20 md:w-20" };
 
   return (
-    <AppShell>
+    <>
       {loading ? (
         <div className="rounded-2xl border border-white/10 bg-[var(--bg-card)] p-6 text-white/80">Loading…</div>
       ) : err ? (
@@ -233,8 +232,7 @@ export default function AchievementsPage() {
                         aria-pressed={picked}
                         className={`group relative block w-full rounded-2xl border border-white/10 transition
                           ${isUnlocked ? "hover:bg-white/[0.07]" : "opacity-70 cursor-default"}
-                          ${picked ? "ring-2 ring-[var(--brand)]" : ""}
-                        `}
+                          ${picked ? "ring-2 ring-[var(--brand)]" : ""}`}
                         style={{ height: CARD_H }}
                       >
                         {/* Grid aligns content tighter and keeps a bottom gap */}
@@ -272,6 +270,6 @@ export default function AchievementsPage() {
           ))}
         </div>
       )}
-    </AppShell>
+    </>
   );
 }

@@ -43,14 +43,16 @@ export default function CreateMenu({
         className={[
           "h-8 px-2.5 inline-flex items-center gap-1.5 rounded-[6px]",
           "text-white/90 hover:text-white",
+          "bg-[#18062e]",                              // base bg (no inline style)
+          "ring-1 ring-white/12 hover:bg-white/10 hover:ring-white/10",
+          "transition-colors",
           "focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)] focus-visible:ring-offset-2",
-          "ring-1 ring-white/12 hover:ring-white/20",
         ].join(" ")}
-        style={{ backgroundColor: "#18062e" }}
       >
         <SvgFileIcon src="/icons/add_24.svg" className="h-[14px] w-[14px]" />
         <CaretDownIcon className="h-3.5 w-3.5 text-white/80" />
       </button>
+
 
       {/* Create dropdown (bg fix + z-index) */}
       <div

@@ -3,7 +3,6 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import AppShell from "@/components/AppShell";
 import ProfileCalendarLarge from "@/components/ProfileCalendarLarge";
 import SetCard, { type SetCardData } from "@/components/SetCard";
 
@@ -21,29 +20,22 @@ type ProfileUser = {
 type ShowcaseBadge = {
   key: string;
   title: string;
-  iconSrc: string; // PNG/SVG/JPG all fine (we render with <img>)
+  iconSrc: string;
 };
 
 type ProfilePayload = {
   user: ProfileUser;
-
-  // preferred shape
   studiedDates?: string[];
   friendsCount?: number;
   streakDays?: number | null;
   totalLikes?: number;
-
-  // profile page now expects this (owner config done on /achievements)
-  badgeShowcase?: ShowcaseBadge[]; // up to 8 items
-
-  // back-compat
+  badgeShowcase?: ShowcaseBadge[];
   stats?: {
     friendsCount?: number;
     studiedDates?: string[];
     streakDays?: number;
     totalLikes?: number;
   };
-
   recentSets?: SetCardData[];
   recentClasses?: Array<{ id: string; title: string; createdAt: string }>;
 };
@@ -57,7 +49,6 @@ export default function PublicProfilePage() {
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<ProfilePayload | null>(null);
 
-  // read viewer session
   useEffect(() => {
     try {
       const raw = localStorage.getItem(SESSION_KEY);
@@ -65,10 +56,9 @@ export default function PublicProfilePage() {
         const u = JSON.parse(raw);
         if (u?.id) setViewerId(u.id);
       }
-    } catch {/* noop */}
+    } catch {}
   }, []);
 
-  // fetch profile
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -90,7 +80,9 @@ export default function PublicProfilePage() {
         if (alive) setLoading(false);
       }
     })();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, [handle]);
 
   const isOwner = useMemo(
@@ -103,7 +95,6 @@ export default function PublicProfilePage() {
     return d ? d.toLocaleDateString() : "";
   }, [data?.user?.createdAt]);
 
-  // read with fallback
   const studiedDates =
     Array.isArray(data?.studiedDates)
       ? data!.studiedDates!
@@ -132,28 +123,32 @@ export default function PublicProfilePage() {
       ? data.stats.totalLikes!
       : 0;
 
-  // ✅ Proper pluralization for streak
   const streakText =
     typeof streakDays === "number"
       ? `${streakDays} ${streakDays === 1 ? "day" : "days"}`
       : "—";
 
-  // ===== Badge Showcase (read up to 8; fill with placeholders if fewer) =====
   const showcaseRaw = Array.isArray(data?.badgeShowcase) ? data!.badgeShowcase! : [];
   const showcase = showcaseRaw.slice(0, 8);
   const emptySlots = Math.max(0, 8 - showcase.length);
 
   return (
-    <AppShell>
+    <>
       {loading ? (
-        <div className="rounded-2xl border border-white/10 bg-[var(--bg-card)] p-6 text-white/80">Loading…</div>
+        <div className="rounded-2xl border border-white/10 bg-[var(--bg-card)] p-6 text-white/80">
+          Loading…
+        </div>
       ) : error ? (
-        <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-6 text-red-200">{error}</div>
+        <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-6 text-red-200">
+          {error}
+        </div>
       ) : !data ? (
-        <div className="rounded-2xl border border-white/10 bg-[var(--bg-card)] p-6 text-white/80">Profile not found.</div>
+        <div className="rounded-2xl border border-white/10 bg-[var(--bg-card)] p-6 text-white/80">
+          Profile not found.
+        </div>
       ) : (
         <div className="space-y-6">
-          {/* -------- Hero bar -------- */}
+          {/* Hero bar */}
           <section className="rounded-2xl border border-white/10 bg-[var(--bg-card)] px-6 py-5 text-white">
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div className="flex items-center gap-4 min-w-0">
@@ -173,16 +168,23 @@ export default function PublicProfilePage() {
 
               <button
                 type="button"
-                onClick={() => (isOwner ? router.push("/settings") : alert("Friend requests coming soon"))}
+                onClick={() =>
+                  isOwner
+                    ? router.push("/settings")
+                    : alert("Friend requests coming soon")
+                }
                 className={`inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold
-                  ${isOwner ? "bg-white/10 ring-1 ring-white/15 hover:bg-white/14" : "bg-[var(--brand)] text-[var(--btn-contrast)] hover:brightness-110"}`}
+                  ${
+                    isOwner
+                      ? "bg-white/10 ring-1 ring-white/15 hover:bg-white/14"
+                      : "bg-[var(--brand)] text-[var(--btn-contrast)] hover:brightness-110"
+                  }`}
               >
                 <SvgMask src="/icons/profile_24.svg" className="h-4 w-4" />
                 {isOwner ? "Edit profile" : "Add friend"}
               </button>
             </div>
 
-            {/* compact stats strip (no emojis) */}
             <div className="mt-4 grid gap-3 sm:grid-cols-3">
               <StatTile label="Total likes" value={totalLikes.toLocaleString()} />
               <StatTile label="Friends" value={friendsCount.toLocaleString()} />
@@ -190,14 +192,13 @@ export default function PublicProfilePage() {
             </div>
           </section>
 
-          {/* -------- Calendar -------- */}
           <ProfileCalendarLarge studiedDates={studiedDates} />
 
-          {/* -------- Badge Showcase (icon + title only) -------- */}
+          {/* Badge Showcase */}
           <section className="rounded-2xl border border-white/10 bg-[var(--bg-card)] p-6 text-white">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-lg font-semibold">Badge showcase</h2>
-              {isOwner ? (
+              {isOwner && (
                 <button
                   type="button"
                   onClick={() => router.push("/achievements")}
@@ -206,16 +207,18 @@ export default function PublicProfilePage() {
                 >
                   Manage in Achievements →
                 </button>
-              ) : null}
+              )}
             </div>
 
             {showcase.length === 0 && !isOwner ? (
-              // Visitor & nothing to show: simple, clean message (no placeholders)
               <p className="text-sm text-white/70">No badges showcased yet.</p>
             ) : (
               <ul className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
                 {showcase.map((b) => (
-                  <li key={b.key} className="rounded-xl border border-white/10 bg-white/5 p-4">
+                  <li
+                    key={b.key}
+                    className="rounded-xl border border-white/10 bg-white/5 p-4"
+                  >
                     <div className="flex items-center gap-3">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
@@ -225,13 +228,14 @@ export default function PublicProfilePage() {
                         draggable={false}
                       />
                       <div className="min-w-0">
-                        <div className="text-sm font-semibold leading-tight truncate">{b.title}</div>
+                        <div className="text-sm font-semibold leading-tight truncate">
+                          {b.title}
+                        </div>
                       </div>
                     </div>
                   </li>
                 ))}
 
-                {/* Show empty slots ONLY to owner so they can fill up to 8 */}
                 {isOwner &&
                   Array.from({ length: emptySlots }).map((_, i) => (
                     <li
@@ -245,8 +249,7 @@ export default function PublicProfilePage() {
             )}
           </section>
 
-
-          {/* -------- Recent sets -------- */}
+          {/* Recent sets */}
           <section className="rounded-2xl border border-white/10 bg-[var(--bg-card)] p-6">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-lg font-semibold text-white">Recent sets</h2>
@@ -272,7 +275,7 @@ export default function PublicProfilePage() {
             )}
           </section>
 
-          {/* -------- Recent classes (placeholder) -------- */}
+          {/* Recent classes */}
           <section className="rounded-2xl border border-white/10 bg-[var(--bg-card)] p-6 text-white">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-lg font-semibold">Recent classes</h2>
@@ -282,7 +285,10 @@ export default function PublicProfilePage() {
             ) : (
               <ul className="space-y-2">
                 {data.recentClasses.map((c) => (
-                  <li key={c.id} className="rounded-xl border border-white/10 bg-white/5 p-4">
+                  <li
+                    key={c.id}
+                    className="rounded-xl border border-white/10 bg-white/5 p-4"
+                  >
                     <div className="text-white font-medium">{c.title}</div>
                     <div className="text-xs text-white/60">
                       Created {new Date(c.createdAt).toLocaleDateString()}
@@ -294,23 +300,28 @@ export default function PublicProfilePage() {
           </section>
         </div>
       )}
-    </AppShell>
+    </>
   );
 }
 
-/* ---------- small helpers ---------- */
+/* Helpers */
 
 function Avatar({ src, alt }: { src?: string | null; alt?: string }) {
   return src ? (
     // eslint-disable-next-line @next/next/no-img-element
-    <img src={src} alt={alt || "avatar"} className="h-14 w-14 rounded-full object-cover ring-1 ring-white/15" />
+    <img
+      src={src}
+      alt={alt || "avatar"}
+      className="h-14 w-14 rounded-full object-cover ring-1 ring-white/15"
+    />
   ) : (
     <div className="h-14 w-14 rounded-full bg-white/10 ring-1 ring-white/15" />
   );
 }
 
 function RolePill({ role }: { role: "STUDENT" | "TEACHER" | "ADMIN" }) {
-  const label = role === "TEACHER" ? "Teacher" : role === "STUDENT" ? "Student" : "Admin";
+  const label =
+    role === "TEACHER" ? "Teacher" : role === "STUDENT" ? "Student" : "Admin";
   return (
     <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-semibold ring-1 ring-white/15">
       {label}
@@ -327,7 +338,6 @@ function StatTile({ label, value }: { label: string; value: string }) {
   );
 }
 
-/** Masked SVG that tints via currentColor */
 function SvgMask({ src, className = "" }: { src: string; className?: string }) {
   const url = `url(${src})`;
   return (

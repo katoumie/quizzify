@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import AppShell from "@/components/AppShell";
 
 const SESSION_KEY = "qz_auth";
 
@@ -303,7 +302,6 @@ export default function SettingsPage() {
   const avatarPreview = pendingAvatar ?? null;
 
   return (
-    <AppShell>
       <div className="space-y-6">
         {/* ===== Profile photo ===== */}
         <section className="rounded-2xl border border-white/10 bg-[var(--bg-card)] p-6 text-white">
@@ -570,7 +568,6 @@ export default function SettingsPage() {
           </div>
         </section>
       </div>
-    </AppShell>
   );
 }
 

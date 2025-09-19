@@ -1,5 +1,5 @@
 // /src/app/api/user/update/route.ts
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import type { Role } from "@prisma/client";
 
@@ -13,18 +13,21 @@ const USERNAME_REGEX = /^[a-zA-Z][a-zA-Z0-9_]{2,19}$/;
 // allow-list of role strings coming from the client
 const ROLE_VALUES: Role[] = ["STUDENT", "TEACHER", "ADMIN"];
 
- /**
-  * PATCH body can include any subset of:
-  * { id, avatar, username, email, role }
-  * - id is required (the logged-in user id)
-  * - avatar is a string (URL or DataURL) or null
-  * - username optional, validated & unique
-  * - email optional, validated & unique
-  * - role optional; must be one of "STUDENT" | "TEACHER" | "ADMIN"
-  */
-export async function PATCH(req: Request) {
+/**
+ * PATCH body can include any subset of:
+ * { id, avatar, username, email, role }
+ * - id is required (the logged-in user id)
+ * - avatar is a string (URL or DataURL) or null
+ * - username optional, validated & unique
+ * - email optional, validated & unique
+ * - role optional; must be one of "STUDENT" | "TEACHER" | "ADMIN"
+ */
+export async function PATCH(
+  req: NextRequest,
+  _context: RouteContext<"/api/user/update"> // params is Promise<{}> for this static route
+) {
   try {
-    const body = await req.json().catch(() => ({}));
+    const body = await req.json().catch(() => ({} as any));
 
     const id = (body?.id ?? "").toString();
     const avatar = body?.avatar as string | null | undefined;
@@ -48,7 +51,10 @@ export async function PATCH(req: Request) {
       const username = usernameRaw.trim();
       if (!USERNAME_REGEX.test(username)) {
         return NextResponse.json(
-          { error: "Username must be 3–20 chars, start with a letter, and contain only letters, numbers, or underscores." },
+          {
+            error:
+              "Username must be 3–20 chars, start with a letter, and contain only letters, numbers, or underscores.",
+          },
           { status: 400 }
         );
       }
@@ -94,7 +100,7 @@ export async function PATCH(req: Request) {
         username: true,
         avatar: true,
         createdAt: true,
-        role: true, // 👈 include role in response
+        role: true, // include role in response
       },
     });
 

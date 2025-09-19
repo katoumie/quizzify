@@ -1,12 +1,12 @@
 // /src/app/api/users/[handle]/activity/route.ts
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
 // helpers
 function ymd(d: Date) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
   return `${y}-${m}-${dd}`;
 }
 function firstOfMonth(year: number, month1based: number) {
@@ -22,19 +22,29 @@ function addDays(d: Date, delta: number) {
 }
 
 export async function GET(
-  req: Request,
-  { params }: { params: { handle: string } }
+  req: NextRequest,
+  context: RouteContext<"/api/users/[handle]/activity">
 ) {
   try {
-    const { searchParams } = new URL(req.url);
-    const year = Number(searchParams.get("year")) || new Date().getUTCFullYear();
-    const month = Number(searchParams.get("month")) || new Date().getUTCMonth() + 1; // 1..12
+    const { handle } = await context.params;
 
-    const user = await prisma.user.findUnique({
-      where: { username: params.handle },
+    const { searchParams } = new URL(req.url);
+    const now = new Date();
+    const year = Number(searchParams.get("year")) || now.getUTCFullYear();
+    const month = Number(searchParams.get("month")) || now.getUTCMonth() + 1; // 1..12
+
+    const user = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { username: { equals: handle, mode: "insensitive" } },
+          { id: handle },
+        ],
+      },
       select: { id: true },
     });
-    if (!user) return NextResponse.json({ error: "User not found." }, { status: 404 });
+    if (!user) {
+      return NextResponse.json({ error: "User not found." }, { status: 404 });
+    }
 
     const start = firstOfMonth(year, month);
     const until = nextMonth(start);
@@ -46,20 +56,20 @@ export async function GET(
       orderBy: { date: "asc" },
     });
 
-    const days = rows.map(r => ({
+    const days = rows.map((r) => ({
       dateISO: ymd(new Date(r.date)),
       studied: r.studied,
     }));
 
-    // simple current streak (last 90 days, counting back from today)
-    const todayUTC = new Date();
+    // simple current streak (last 90 days, counting back from today UTC)
+    const todayUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
     const ninetyAgo = addDays(todayUTC, -90);
     const recent = await prisma.studyActivity.findMany({
       where: { userId: user.id, date: { gte: ninetyAgo, lte: todayUTC } },
       select: { date: true },
       orderBy: { date: "desc" },
     });
-    const set = new Set(recent.map(r => ymd(new Date(r.date))));
+    const set = new Set(recent.map((r) => ymd(new Date(r.date))));
     let streak = 0;
     for (let i = 0; i < 365; i++) {
       const iso = ymd(addDays(todayUTC, -i));
@@ -67,13 +77,16 @@ export async function GET(
       else break;
     }
 
-    return NextResponse.json({
-      year,
-      month,                 // 1..12
-      todayISO: ymd(todayUTC),
-      days,                  // [{dateISO, studied}]
-      currentStreakDays: streak,
-    });
+    return NextResponse.json(
+      {
+        year,
+        month, // 1..12
+        todayISO: ymd(todayUTC),
+        days, // [{ dateISO, studied }]
+        currentStreakDays: streak,
+      },
+      { status: 200 }
+    );
   } catch (err) {
     console.error("GET /api/users/[handle]/activity error:", err);
     return NextResponse.json({ error: "Server error" }, { status: 500 });

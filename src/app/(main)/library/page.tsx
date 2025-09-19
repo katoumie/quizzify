@@ -2,7 +2,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import AppShell from "@/components/AppShell";
 import SetCard, { type SetCardData } from "@/components/SetCard";
 import { useRouter, useSearchParams } from "next/navigation";
 
@@ -121,7 +120,7 @@ export default function LibraryPage() {
   };
 
   return (
-    <AppShell>
+    <>
       {/* Top area (tabs now live in the navbar subnav) */}
       <div className="mb-6">
         {activeTab === "sets" && (
@@ -219,6 +218,6 @@ export default function LibraryPage() {
           Magic Notes coming right up — upload a PDF to generate smart notes.
         </section>
       )}
-    </AppShell>
+    </>
   );
 }

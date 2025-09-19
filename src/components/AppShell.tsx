@@ -3,7 +3,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useLayoutEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import NotificationsPanel from "@/components/NotificationsPanel";
 import Sidebar from "@/components/Sidebar";
@@ -11,36 +11,89 @@ import NavSearch from "@/components/NavSearch";
 import CreateMenu from "@/components/CreateMenu";
 import ProfileMenu from "@/components/ProfileMenu";
 import SubnavLibrary from "@/components/SubnavLibrary";
+import SvgFileIcon from "@/components/SvgFileIcon";
 
 const SESSION_KEY = "qz_auth";
+const SIDEBAR_COMPACT_KEY = "qz_sidebar_compact";
 
-// Header metrics
-const NAV_H = 60;        // top bar height
-const HEADER_BORDER = 1; // bottom border thickness of the header
+// Layout metrics
+const NAV_H = 60;
+const HEADER_BORDER = 1;
+const SIDEBAR_W = 240;
+const SIDEBAR_W_COMPACT = 72;
+const CONTENT_GAP = 20;
 
 type AvatarObj = { kind: "builtin" | "upload"; src: string };
 type Avatar = string | AvatarObj | null | undefined;
+type SessionUser = { id: string; email: string; username?: string | null; createdAt?: string; avatar?: Avatar };
 
-type SessionUser = {
-  id: string;
-  email: string;
-  username?: string | null;
-  createdAt?: string;
-  avatar?: Avatar;
-};
-
-export default function AppShell({ children }: { children: React.ReactNode }) {
+export default function AppShell({
+  children,
+  initialCompact = false,
+}: {
+  children: React.ReactNode;
+  initialCompact?: boolean;
+}) {
   const router = useRouter();
   const pathname = usePathname();
 
-  // session display
+  // ===== Session display =====
   const [displayName, setDisplayName] = useState("User");
   const [initial, setInitial] = useState("U");
   const [email, setEmail] = useState<string>("");
   const [avatarSrc, setAvatarSrc] = useState<string | null>(null);
   const [profileHref, setProfileHref] = useState<string>("/u/me");
 
-  // session bootstrap
+  // ===== Sidebar compact state (now seeded from server via prop) =====
+  const [sidebarCompact, setSidebarCompact] = useState<boolean>(initialCompact);
+
+  function setSidebarCompactDOM(next: boolean) {
+    const w = next ? SIDEBAR_W_COMPACT : SIDEBAR_W;
+    document.documentElement.dataset.sidebarCompact = next ? "1" : "0";
+    document.documentElement.style.setProperty("--sidebar-w", `${w}px`);
+    setSidebarCompact(next);
+  }
+
+  // On first mount, sync DOM and localStorage to the server-provided value
+  useLayoutEffect(() => {
+    try {
+      localStorage.setItem(SIDEBAR_COMPACT_KEY, initialCompact ? "1" : "0");
+    } catch {}
+    setSidebarCompactDOM(initialCompact);
+
+    // Cross-tab + BFCache listeners
+    const onPageShow = () => {
+      try {
+        const compact = localStorage.getItem(SIDEBAR_COMPACT_KEY) === "1";
+        setSidebarCompactDOM(compact);
+      } catch {}
+    };
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === SIDEBAR_COMPACT_KEY) {
+        const compact = e.newValue === "1";
+        setSidebarCompactDOM(compact);
+      }
+    };
+    window.addEventListener("pageshow", onPageShow);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener("pageshow", onPageShow);
+      window.removeEventListener("storage", onStorage);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // run once
+
+  // === Toggle writes cookie + localStorage so SSR matches on next request
+  const toggleSidebarCompact = () => {
+    const next = !sidebarCompact;
+    try {
+      localStorage.setItem(SIDEBAR_COMPACT_KEY, next ? "1" : "0");
+    } catch {}
+    document.cookie = `qz_sidebar_compact=${next ? "1" : "0"}; Path=/; Max-Age=31536000; SameSite=Lax`;
+    setSidebarCompactDOM(next);
+  };
+
+  // ===== Session bootstrap =====
   useEffect(() => {
     const extractAvatarSrc = (avatar: Avatar): string | null => {
       if (!avatar) return null;
@@ -48,7 +101,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       if (typeof avatar === "object" && "src" in avatar) return (avatar as AvatarObj).src;
       return null;
     };
-
     const refreshFromStorage = () => {
       try {
         const raw = localStorage.getItem(SESSION_KEY);
@@ -57,9 +109,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         if (!session?.id) return router.replace("/signin");
 
         const em = session.email ?? "";
-        const derived = session.username?.trim()
-          ? session.username.trim()
-          : deriveDisplayFromEmail(em);
+        const derived = session.username?.trim() ? session.username.trim() : deriveDisplayFromEmail(em);
 
         setDisplayName(derived);
         setInitial(derived.charAt(0).toUpperCase() || "U");
@@ -84,16 +134,17 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   }, [router]);
 
   const handleLogout = () => {
+    try {
+      localStorage.removeItem(SIDEBAR_COMPACT_KEY);
+    } catch {}
+    document.cookie = `qz_sidebar_compact=0; Path=/; Max-Age=0; SameSite=Lax`;
+    setSidebarCompactDOM(false);
     localStorage.removeItem(SESSION_KEY);
     router.replace("/signin");
   };
 
-  const isActive = (href: string) =>
-    pathname === href || (href !== "/main" && pathname?.startsWith(href));
-
-  const onSetStatus = () => {
-    console.log("Open Set Status modal");
-  };
+  const isActive = (href: string) => pathname === href || (href !== "/main" && pathname?.startsWith(href));
+  const onSetStatus = () => console.log("Open Set Status modal");
 
   const pageTitle = useMemo(() => {
     if (!pathname) return "";
@@ -110,34 +161,35 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   }, [pathname]);
 
   const showLibraryTabs = pathname?.startsWith("/library") ?? false;
-
-  // Sidebar offset (no extra subnav height anymore)
   const sidebarTopPx = NAV_H + HEADER_BORDER;
 
   return (
     <div className="min-h-screen bg-[var(--bg)] text-white">
-      {/* ===== Single Sticky Navbar (60px) with inline tabs on /library ===== */}
-      <div
-        className="sticky top-0 z-50 w-full border-b border-white/15"
-        style={{ backgroundColor: "#18062e" }}
-      >
+      {/* ===== Single Sticky Navbar ===== */}
+      <div className="sticky top-0 z-50 w-full border-b border-white/15" style={{ backgroundColor: "#18062e" }}>
         <div className="relative h-[60px] px-4 flex items-center justify-between gap-3">
-          {/* Left: logo */}
-          <div className="flex items-center gap-3">
-            <Link href="/main" aria-label="Quizzify home" className="flex items-center gap-3 no-underline">
-              <Image
-                src="/logo-q.svg"
-                alt="Quizzify"
-                width={32}
-                height={32}
-                priority
-                className="h-8 w-auto select-none"
-                draggable={false}
-              />
-            </Link>
+          {/* Left: hamburger only (logo moved into Sidebar) */}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              aria-label={sidebarCompact ? "Expand sidebar" : "Collapse sidebar"}
+              aria-pressed={sidebarCompact}
+              onClick={toggleSidebarCompact}
+              className={[
+                "h-8 px-2.5 inline-flex items-center justify-center rounded-[6px]",
+                "text-white/90 hover:text-white",
+                "bg-[#18062e]",
+                "ring-1 ring-white/12 hover:bg-white/10 hover:ring-white/10",
+                "transition-colors",
+                "focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)] focus-visible:ring-offset-2",
+              ].join(" ")}
+              title={sidebarCompact ? "Expand sidebar" : "Collapse sidebar"}
+            >
+              <SvgFileIcon src="/icons/menu.svg" className="h-[14px] w-[14px]" />
+            </button>
           </div>
 
-          {/* Center (inline tabs) — absolutely positioned so the left edge aligns to 240 + 12 */}
+          {/* Center: inline Library tabs */}
           {showLibraryTabs && <SubnavLibrary />}
 
           {/* Right: Search + Create + Profile */}
@@ -157,24 +209,29 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </div>
 
-      {/* ===== Sidebar ===== */}
+      {/* ===== Sidebar with logo at top ===== */}
       <aside
         id="app-sidebar"
-        className="fixed left-0 z-30 w-[240px] px-2 pt-2 border-r border-white/15"
+        className="fixed left-0 z-30 px-2 pt-2 border-r border-white/15"
         style={{
           background: "var(--sidebar-bg)",
           top: sidebarTopPx,
+          width: "var(--sidebar-w)",
           height: `calc(100vh - ${sidebarTopPx}px)`,
         }}
       >
         <Sidebar
+          compact={sidebarCompact}
           isActive={(href) => isActive(href)}
           onNotifications={() => window.dispatchEvent(new CustomEvent("qz:open-notifs"))}
         />
       </aside>
 
       {/* ===== Main ===== */}
-      <main className="pl-[260px] px-4 py-6 transition-[padding] duration-300">
+      <main
+        className="px-4 py-6 transition-[padding] duration-300"
+        style={{ paddingLeft: `calc(var(--sidebar-w) + ${CONTENT_GAP}px)` }}
+      >
         <div className="mx-auto max-w-[1200px]">{children}</div>
       </main>
 
@@ -182,19 +239,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
       {/* Hide native "x" on type=search (keep only our custom clear) */}
       <style jsx global>{`
-        input.no-native-clear::-webkit-search-cancel-button {
-          -webkit-appearance: none;
-          appearance: none;
-          display: none;
-        }
-        input.no-native-clear::-webkit-search-decoration {
-          -webkit-appearance: none;
-        }
-        input.no-native-clear::-ms-clear {
-          display: none;
-          width: 0;
-          height: 0;
-        }
+        input.no-native-clear::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; display: none; }
+        input.no-native-clear::-webkit-search-decoration { -webkit-appearance: none; }
+        input.no-native-clear::-ms-clear { display: none; width: 0; height: 0; }
       `}</style>
     </div>
   );

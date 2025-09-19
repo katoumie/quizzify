@@ -1,11 +1,14 @@
 // /src/app/api/sets/[id]/route.ts
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
 /** GET one set (with cards) */
-export async function GET(_req: Request, { params }: { params: { id: string } }) {
+export async function GET(
+  _req: NextRequest,
+  context: RouteContext<"/api/sets/[id]">
+) {
   try {
-    const id = params.id;
+    const { id } = await context.params;
     if (!id) return NextResponse.json({ error: "Missing id." }, { status: 400 });
 
     const set = await prisma.studySet.findUnique({
@@ -13,11 +16,11 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       select: {
         id: true,
         title: true,
-        description: true,    // ✅ include description
-        isPublic: true,       // ✅ include visibility
+        description: true,
+        isPublic: true,
         createdAt: true,
         cards: {
-          orderBy: [{ position: "asc" }, { createdAt: "asc" }], // uses your schema's position
+          orderBy: [{ position: "asc" }, { createdAt: "asc" }],
           select: { id: true, term: true, definition: true, position: true, createdAt: true },
         },
       },
@@ -32,12 +35,15 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 }
 
 /** PATCH update title/description/isPublic/cards (replace cards) */
-export async function PATCH(req: Request, { params }: { params: { id: string } }) {
+export async function PATCH(
+  req: NextRequest,
+  context: RouteContext<"/api/sets/[id]">
+) {
   try {
-    const id = params.id;
+    const { id } = await context.params;
     if (!id) return NextResponse.json({ error: "Missing id." }, { status: 400 });
 
-    const body = await req.json().catch(() => ({}));
+    const body = await req.json().catch(() => ({} as any));
 
     const title =
       typeof body?.title === "string" ? body.title.trim() : undefined;
@@ -65,7 +71,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
     const tx: any[] = [];
 
-    // if visibility flips from public -> private, optionally clear non-owner likes (tidy)
+    // If visibility flips public -> private, optionally clear non-owner likes
     let prev: { isPublic: boolean; ownerId: string } | null = null;
     if (typeof isPublic !== "undefined") {
       prev = await prisma.studySet.findUnique({
@@ -133,9 +139,12 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 }
 
 /** DELETE a set (delete cards first, then set) */
-export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
+export async function DELETE(
+  _req: NextRequest,
+  context: RouteContext<"/api/sets/[id]">
+) {
   try {
-    const id = params.id;
+    const { id } = await context.params;
     if (!id) return NextResponse.json({ error: "Missing id." }, { status: 400 });
 
     await prisma.$transaction([

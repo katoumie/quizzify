@@ -1,5 +1,5 @@
 // /src/app/api/sets/[id]/like/route.ts
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
 /**
@@ -12,22 +12,17 @@ import { prisma } from "@/lib/prisma";
  *     set       StudySet @relation(fields: [setId], references: [id], onDelete: Cascade)
  *     setId     String
  *     createdAt DateTime @default(now())
- *     @@unique([userId, setId])  // important for toggle logic
+ *     @@unique([userId, setId])
  *   }
- *
- * Client usage (example):
- *   const u = JSON.parse(localStorage.getItem("qz_auth")!);
- *   await fetch(`/api/sets/${setId}/like`, {
- *     method: "POST",
- *     headers: { "Content-Type": "application/json" },
- *     body: JSON.stringify({ userId: u.id }),
- *   });
  */
 
 /** GET like status + count (requires ?userId=...) */
-export async function GET(req: Request, { params }: { params: { id: string } }) {
+export async function GET(
+  req: NextRequest,
+  context: RouteContext<"/api/sets/[id]/like">
+) {
   try {
-    const setId = params.id;
+    const { id: setId } = await context.params;
     if (!setId) return NextResponse.json({ error: "Missing set id." }, { status: 400 });
 
     const url = new URL(req.url);
@@ -45,7 +40,12 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     const likeCount = await prisma.like.count({ where: { setId } });
 
     return NextResponse.json(
-      { liked: Boolean(existing), likeCount, isPublic: set.isPublic, isOwner: set.ownerId === userId },
+      {
+        liked: Boolean(existing),
+        likeCount,
+        isPublic: set.isPublic,
+        isOwner: set.ownerId === userId,
+      },
       { status: 200 }
     );
   } catch (err) {
@@ -55,13 +55,19 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
 }
 
 /** POST toggle like (like if not liked, unlike if already liked) */
-export async function POST(req: Request, { params }: { params: { id: string } }) {
+export async function POST(
+  req: NextRequest,
+  context: RouteContext<"/api/sets/[id]/like">
+) {
+  let setId = "";
+  let userId = "";
   try {
-    const setId = params.id;
+    const params = await context.params;
+    setId = params.id;
     if (!setId) return NextResponse.json({ error: "Missing set id." }, { status: 400 });
 
-    const body = await req.json().catch(() => ({}));
-    const userId = String(body?.userId || "");
+    const body = await req.json().catch(() => ({} as any));
+    userId = String(body?.userId || "");
     if (!userId) return NextResponse.json({ error: "Missing userId." }, { status: 400 });
 
     // Fetch set: visibility + owner
@@ -93,10 +99,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     return NextResponse.json({ liked: !existing, likeCount }, { status: 200 });
   } catch (err: any) {
     // Handle unique violation gracefully (race conditions)
-    if (err?.code === "P2002") {
-      const setId = params.id;
-      const body = await req.json().catch(() => ({}));
-      const userId = String(body?.userId || "");
+    if (err?.code === "P2002" && setId) {
       const likeCount = await prisma.like.count({ where: { setId } });
       return NextResponse.json({ liked: true, likeCount }, { status: 200 });
     }
@@ -106,9 +109,12 @@ export async function POST(req: Request, { params }: { params: { id: string } })
 }
 
 /** DELETE explicit unlike */
-export async function DELETE(req: Request, { params }: { params: { id: string } }) {
+export async function DELETE(
+  req: NextRequest,
+  context: RouteContext<"/api/sets/[id]/like">
+) {
   try {
-    const setId = params.id;
+    const { id: setId } = await context.params;
     if (!setId) return NextResponse.json({ error: "Missing set id." }, { status: 400 });
 
     const url = new URL(req.url);
