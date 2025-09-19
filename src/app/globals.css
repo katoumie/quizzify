@@ -15,7 +15,7 @@
   --sidebar-bg: #180733;
   /* Legacy aliases so your existing CSS keeps working */
   --background: var(--bg);
-  --foreground: #FFFFFF;                   /* default text */
+  --foreground: #f0f6fc;                   /* default text */
 }
 
 /* (You can add future themes later, e.g.)

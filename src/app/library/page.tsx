@@ -1,3 +1,4 @@
+// /src/app/library/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -8,7 +9,6 @@ import { useRouter, useSearchParams } from "next/navigation";
 const SESSION_KEY = "qz_auth";
 
 type FolderLite = { id: string; name: string; createdAt: string; _count: { sets: number } };
-
 type SortKey = "recent" | "liked" | "alpha_asc" | "alpha_desc";
 
 export default function LibraryPage() {
@@ -24,7 +24,7 @@ export default function LibraryPage() {
   const [folders, setFolders] = useState<FolderLite[]>([]);
 
   const [query, setQuery] = useState("");
-  const activeTab = (search.get("tab") || "sets") as "sets" | "notes" | "folders" | "classes";
+  const activeTab = (search.get("tab") || "sets") as "sets" | "notes" | "folders";
   const sort = (search.get("sort") || "recent") as SortKey;
 
   useEffect(() => {
@@ -122,37 +122,10 @@ export default function LibraryPage() {
 
   return (
     <AppShell>
-      {/* Top area */}
+      {/* Top area (tabs now live in the navbar subnav) */}
       <div className="mb-6">
-        {/* Tabs row */}
-        <nav className="flex items-center gap-6 text-sm text-white/80">
-          {[
-            { key: "sets", label: "Study sets" },
-            { key: "notes", label: "Magic Notes" },
-            { key: "folders", label: "Folders" },
-            { key: "classes", label: "Classes" },
-          ].map((t) => {
-            const active = activeTab === (t.key as any);
-            return (
-              <button
-                key={t.key}
-                onClick={() => nav({ tab: t.key })}
-                className={`relative py-3 hover:text-white ${active ? "text-white" : ""}`}
-              >
-                {t.label}
-                <span
-                  className={`absolute left-0 right-0 -bottom-px h-[2px] transition ${
-                    active ? "bg-[var(--brand)]" : "bg-transparent"
-                  }`}
-                />
-              </button>
-            );
-          })}
-        </nav>
-
-        {/* Controls row */}
         {activeTab === "sets" && (
-          <div className="mt-3 flex items-center justify-between">
+          <div className="mt-1 flex items-center justify-between">
             {/* Sort (left) */}
             <label className="inline-flex items-center gap-2 text-white/80">
               <span className="text-sm">Sort</span>
@@ -178,7 +151,7 @@ export default function LibraryPage() {
           </div>
         )}
 
-        {/* Divider now sits AFTER controls to avoid overlap */}
+        {/* Divider sits after controls */}
         <div className="mt-3 border-b border-white/10" />
       </div>
 
@@ -241,13 +214,9 @@ export default function LibraryPage() {
             </ul>
           )}
         </section>
-      ) : activeTab === "notes" ? (
-        <section className="rounded-2xl border border-white/10 bg-[var(--bg-card)] p-6 text-white/80">
-          Magic Notes coming right up — upload a PDF to generate smart notes.
-        </section>
       ) : (
         <section className="rounded-2xl border border-white/10 bg-[var(--bg-card)] p-6 text-white/80">
-          Classes — teachers can create classes, students can join with a code. (Next step)
+          Magic Notes coming right up — upload a PDF to generate smart notes.
         </section>
       )}
     </AppShell>
