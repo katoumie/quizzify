@@ -76,22 +76,22 @@ export default function ProfileMenu({
         <MenuHeader avatarSrc={avatarSrc} initial={initial} displayName={displayName} email={email} />
 
         {/* Set status */}
-        <MenuRow asButton onClick={() => { onSetStatus(); setOpen(false); }} iconSrc="/icons/status_24.svg" label="Set status" />
+        <MenuRow asButton onClick={() => { onSetStatus(); setOpen(false); }} iconSrc="/icons/set_status.svg" label="Set status" />
 
         <div className="mx-2 my-2 h-px bg-white/15" />
 
         {/* Profile + Achievements */}
         <div className="py-1">
-          <MenuRow href={profileHref} iconSrc="/icons/profile_24.svg" label="Profile" onClick={() => setOpen(false)} />
-          <MenuRow href="/achievements" iconSrc="/icons/trophy_24.svg" label="Achievements" onClick={() => setOpen(false)} />
+          <MenuRow href={profileHref} iconSrc="/icons/profile.svg" label="Profile" onClick={() => setOpen(false)} />
+          <MenuRow href="/achievements" iconSrc="/icons/achievements.svg" label="Achievements" onClick={() => setOpen(false)} />
         </div>
 
         <div className="mx-2 my-2 h-px bg-white/15" />
 
         {/* Settings + Help */}
         <div className="py-1">
-          <MenuRow href="/settings" iconSrc="/icons/settings_24.svg" label="Settings" onClick={() => setOpen(false)} />
-          <MenuRow href="/help" iconSrc="/icons/help_24.svg" label="Help and feedback" onClick={() => setOpen(false)} />
+          <MenuRow href="/settings" iconSrc="/icons/settings.svg" label="Settings" onClick={() => setOpen(false)} />
+          <MenuRow href="/help" iconSrc="/icons/help.svg" label="Help and feedback" onClick={() => setOpen(false)} />
         </div>
 
         <div className="mx-2 my-2 h-px bg-white/15" />
@@ -101,7 +101,7 @@ export default function ProfileMenu({
           <MenuRow
             asButton
             onClick={() => { onLogout(); setOpen(false); }}
-            iconSrc="/icons/logout_24.svg"
+            iconSrc="/icons/signout.svg"
             label="Sign out"
             danger
             className="mb-2"

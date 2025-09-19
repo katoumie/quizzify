@@ -14,10 +14,10 @@ const LEFT_OFFSET = SIDEBAR_W + CONTENT_GAP + EXTRA_PUSH - NAVBAR_XPAD; // 260
 /** Keep tabs from colliding with the right cluster (search/profile) */
 const RIGHT_SAFE = 380;
 
-/** Highlight geometry (GitHub-ish) */
+/** Highlight geometry */
 const HILIGHT_H = 3;         // thickness in px
 const HILIGHT_OVERRUN = 6;   // left/right overshoot (px)
-const HILIGHT_OFFSET = 6;    // distance below label (px)
+const HILIGHT_OFFSET = 9;    // distance below label (px)
 
 export default function SubnavLibrary() {
   const search = useSearchParams();

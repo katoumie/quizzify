@@ -77,7 +77,7 @@ export default function CreateMenu({
             onClick={() => { onCreateFolder?.(); setOpen(false); }}
             className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-sm font-regular text-white hover:bg-white/10 text-left"
           >
-            <SvgFileIcon src="/icons/folder_icon.svg" className="h-[18px] w-[18px] text-white" />
+            <SvgFileIcon src="/icons/create_folder.svg" className="h-[18px] w-[18px] text-white" />
             <span>Create folder</span>
           </button>
         </div>

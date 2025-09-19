@@ -18,25 +18,25 @@ export default function Sidebar({
       <nav className="space-y-1.5">
         <SideItem
           href="/main"
-          icon={<SvgFileIcon src="/icons/home_24.svg" className="h-5 w-5" />}
+          icon={<SvgFileIcon src="/icons/home.svg" className="h-5 w-5" />}
           label="Home"
           active={isActive("/main")}
         />
         <SideItem
           href="/library"
-          icon={<SvgFileIcon src="/icons/folder_icon.svg" className="h-5 w-5" />}
+          icon={<SvgFileIcon src="/icons/library.svg" className="h-5 w-5" />}
           label="Library"
           active={isActive("/library")}
         />
         <SideItem
           href="/classes"
-          icon={<SvgFileIcon src="/icons/classes_24.svg" className="h-5 w-5" />}
+          icon={<SvgFileIcon src="/icons/classes.svg" className="h-5 w-5" />}
           label="Classes"
           active={isActive("/classes")}
         />
         <SideItem
           href="/explore"
-          icon={<SvgFileIcon src="/icons/search_24.svg" className="h-5 w-5" />}
+          icon={<SvgFileIcon src="/icons/explore.svg" className="h-5 w-5" />}
           label="Explore"
           active={isActive("/explore")}
         />
@@ -49,19 +49,19 @@ export default function Sidebar({
       <nav className="space-y-1.5">
         <SideItem
           href="/learn"
-          icon={<SvgFileIcon src="/icons/learn_24.svg" className="h-5 w-5" />}
+          icon={<SvgFileIcon src="/icons/learn.svg" className="h-5 w-5" />}
           label="Learn"
           active={isActive("/learn")}
         />
         <SideItem
           href="/flashcards"
-          icon={<SvgFileIcon src="/icons/flashcards_24.svg" className="h-5 w-5" />}
+          icon={<SvgFileIcon src="/icons/flashcards.svg" className="h-5 w-5" />}
           label="Flashcards"
           active={isActive("/flashcards")}
         />
         <SideItem
           href="/duels"
-          icon={<SvgFileIcon src="/icons/duels_24.svg" className="h-5 w-5" />}
+          icon={<SvgFileIcon src="/icons/duels.svg" className="h-5 w-5" />}
           label="Duels"
           active={isActive("/duels")}
         />
@@ -74,13 +74,13 @@ export default function Sidebar({
       <nav className="space-y-1.5">
         <SideItem
           href="/friends"
-          icon={<SvgFileIcon src="/icons/friends_24.svg" className="h-5 w-5" />}
+          icon={<SvgFileIcon src="/icons/friends.svg" className="h-5 w-5" />}
           label="Friends"
           active={isActive("/friends")}
         />
         <SideItemButton
           onClick={onNotifications}
-          icon={<SvgFileIcon src="/icons/notifications_24.svg" className="h-5 w-5" />}
+          icon={<SvgFileIcon src="/icons/notifications.svg" className="h-5 w-5" />}
           label="Notifications"
         />
       </nav>
