@@ -49,7 +49,7 @@ export default function CreateMenu({
           "focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)] focus-visible:ring-offset-2",
         ].join(" ")}
       >
-        <SvgFileIcon src="/icons/add_24.svg" className="h-[14px] w-[14px]" />
+        <SvgFileIcon src="/icons/add.svg" className="h-[14px] w-[14px]" />
         <CaretDownIcon className="h-3.5 w-3.5 text-white/80" />
       </button>
 
@@ -71,7 +71,7 @@ export default function CreateMenu({
             className="flex items-center gap-3 rounded-md px-3 py-2.5 text-sm font-regular text-white hover:bg-white/10"
             onClick={() => setOpen(false)}
           >
-            <SvgFileIcon src="/icons/add_24.svg" className="h-[18px] w-[18px] text-white" />
+            <SvgFileIcon src="/icons/add.svg" className="h-[18px] w-[18px] text-white" />
             <span>Create set</span>
           </Link>
           <button

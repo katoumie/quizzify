@@ -3,7 +3,8 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import SetForm, { type SetFormInitialData } from "@/components/SetForm";
+import SetForm from "@/components/set-form/SetForm";
+import type { SetFormInitialData } from "@/types/set";
 
 export default function EditSetPage() {
   const { id } = useParams<{ id: string }>();
@@ -12,52 +13,57 @@ export default function EditSetPage() {
 
   useEffect(() => {
     let alive = true;
-
     (async () => {
       try {
-        const res = await fetch(`/api/sets/${id}`);
+        const res = await fetch(`/api/sets/${id}`, { cache: "no-store" });
         const json = await res.json();
         if (!res.ok) {
-          setError(json?.error || "Failed to load set.");
+          if (alive) setError(json?.error || "Failed to load set.");
           return;
         }
         if (!alive) return;
 
-        setData({
+        const initialData: SetFormInitialData = {
           id: json.id,
           title: json.title,
           description: json.description ?? "",
           isPublic: Boolean(json.isPublic),
+          defaultSkillName: json?.defaultSkill?.name ?? null,
           cards: (json.cards || []).map((c: any) => ({
             id: c.id,
             term: c.term,
             definition: c.definition,
-            imageUrl: c.imageUrl ?? null, // 👈 include images
+            imageUrl: c.imageUrl ?? null,
+            position: c.position ?? 0,
+            skill: c.skill ?? null,
+            inheritDefault: Boolean(c.inheritDefault),
           })),
-        });
+        };
+        setData(initialData);
       } catch {
-        setError("Network error.");
+        if (alive) setError("Network error.");
       }
     })();
-
     return () => {
       alive = false;
     };
   }, [id]);
 
-  return (
-    <>
-      {error ? (
-        <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-6 text-red-200">
-          {error}
-        </div>
-      ) : !data ? (
-        <div className="rounded-2xl border border-white/10 bg-[var(--bg-card)] p-6 text-white/80">
-          Loading…
-        </div>
-      ) : (
-        <SetForm mode="edit" initialData={data} />
-      )}
-    </>
-  );
+  if (error) {
+    return (
+      <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-6 text-red-200">
+        {error}
+      </div>
+    );
+  }
+
+  if (!data) {
+    return (
+      <div className="rounded-2xl border border-white/10 bg-[var(--bg-card)] p-6 text-white/80">
+        Loading…
+      </div>
+    );
+  }
+
+  return <SetForm mode="edit" initialData={data} />;
 }

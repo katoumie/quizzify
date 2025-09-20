@@ -53,7 +53,7 @@ export default function LibraryPage() {
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch(`/api/library?ownerId=${encodeURIComponent(ownerId)}`);
+        const res = await fetch(`/api/library?ownerId=${encodeURIComponent(ownerId)}`, { cache: "no-store" });
         const data = await res.json();
         if (!res.ok) {
           setError(data?.error || "Failed to load library.");
@@ -175,14 +175,45 @@ export default function LibraryPage() {
                     showActions={sort !== "liked"}
                     initiallyLiked={likedSets.some((l) => l.id === s.id)}
                     onEdit={(id) => router.push(`/sets/${id}/edit`)}
+
                     onDelete={async (id) => {
                       if (!confirm("Delete this set? This cannot be undone.")) return;
-                      const res = await fetch(`/api/sets/${id}`, { method: "DELETE" });
-                      const js = await res.json().catch(() => ({}));
-                      if (!res.ok) return alert(js?.error || "Failed to delete.");
-                      setRecentSets((r) => r.filter((x) => x.id !== id));
-                      setLikedSets((r) => r.filter((x) => x.id !== id));
+                      if (!ownerId) {
+                        alert("Missing owner id. Please sign in again.");
+                        return;
+                      }
+                      try {
+                        // Prefer JSON body for DELETE; more reliable across environments
+                        let res = await fetch(`/api/sets/${id}`, {
+                          method: "DELETE",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ ownerId }),
+                        });
+
+                        // Fallback to query-string variant if needed
+                        if (!res.ok) {
+                          res = await fetch(`/api/sets/${id}?ownerId=${encodeURIComponent(ownerId)}`, {
+                            method: "DELETE",
+                          });
+                        }
+
+                        const js = await res.json().catch(() => ({}));
+                        if (!res.ok) {
+                          alert(js?.error || "Failed to delete.");
+                          return;
+                        }
+
+                        // Optimistically remove from both sources
+                        setRecentSets((r) => r.filter((x) => x.id !== id));
+                        setLikedSets((r) => r.filter((x) => x.id !== id));
+
+                        // If your list is sometimes server-rendered elsewhere, uncomment:
+                        // router.refresh();
+                      } catch {
+                        alert("Network error. Please try again.");
+                      }
                     }}
+
                     onToggleLike={(id, liked, count) => {
                       setLikedSets((prev) =>
                         liked ? (prev.some((x) => x.id === id) ? prev : [...prev, s]) : prev.filter((x) => x.id !== id)

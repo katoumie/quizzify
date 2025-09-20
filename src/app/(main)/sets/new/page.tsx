@@ -1,6 +1,6 @@
 "use client";
 
-import SetForm from "@/components/SetForm";
+import SetForm from "@/components/set-form/SetForm";
 
 export default function NewSetPage() {
   return (

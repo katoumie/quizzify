@@ -7,6 +7,11 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+/**
+ * =========================
+ * Core Auth / Users
+ * =========================
+ */
 model User {
   id           String   @id @default(cuid())
   email        String   @unique
@@ -19,10 +24,16 @@ model User {
   folders       Folder[]
   sets          StudySet[]
   likes         Like[]
-  // NEW: per-day study activity
   studyDays     StudyDay[]
   StudyActivity StudyActivity[]
   badges        UserBadge[]
+
+  // BKT
+  mastery   UserSkillMastery[]
+  responses Response[]
+
+  // Personal library of skills (NEW backref)
+  userSkills UserSkill[]
 
   @@index([createdAt])
 }
@@ -33,6 +44,11 @@ enum Role {
   ADMIN
 }
 
+/**
+ * =========================
+ * Organization: Folders/Sets/Cards
+ * =========================
+ */
 model Folder {
   id        String     @id @default(cuid())
   name      String
@@ -60,15 +76,49 @@ model StudySet {
   cards   Card[]
   likedBy Like[]
 
+  // BKT: optional default skill for new cards in this set (can be overridden on each card)
+  defaultSkill   Skill?  @relation("StudySet_defaultSkill", fields: [defaultSkillId], references: [id])
+  defaultSkillId String?
+
   @@index([ownerId, createdAt])
   @@index([folderId, createdAt])
+  @@index([defaultSkillId])
 }
 
+model Card {
+  id         String   @id @default(cuid())
+  term       String
+  definition String
+  set        StudySet @relation(fields: [setId], references: [id], onDelete: Cascade)
+  setId      String
+  position   Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  // NEW: distinguish “inherit default” (true) from “explicit” (false)
+  inheritDefault Boolean @default(true)
+
+  // Optional per-card media
+  imageUrl String?
+  imageAlt String?
+
+  // BKT Q-matrix links
+  skills    CardSkill[]
+  responses Response[]
+
+  @@index([setId, position])
+}
+
+/**
+ * =========================
+ * Social / Progress
+ * =========================
+ */
 model UserBadge {
   userId        String
   badgeKey      String
   showcased     Boolean @default(false)
-  showcaseOrder Int? // 0..7 when showcased
+  showcaseOrder Int?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -78,8 +128,8 @@ model UserBadge {
 
 model StudyDay {
   userId String
-  day    DateTime // store at UTC midnight
-  count  Int      @default(1) // how many study pings that day
+  day    DateTime // UTC midnight
+  count  Int      @default(1)
   user   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@id([userId, day])
@@ -98,41 +148,144 @@ model Like {
   @@index([setId])
 }
 
-model Card {
-  id         String   @id @default(cuid())
-  term       String
-  definition String
-  set        StudySet @relation(fields: [setId], references: [id], onDelete: Cascade)
-  setId      String
-  position   Int      @default(0)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-
-  // 👇 NEW (optional) fields for per-card images
-  imageUrl   String?   // public URL to the uploaded image (Supabase, Vercel Blob, S3, etc.)
-  imageAlt   String?   // optional alt text for accessibility
-
-  @@index([setId, position])
-}
-
 /**
- * NEW: one row per user per calendar day they studied
+ * One row per user per calendar date (Postgres DATE) with a simple counter.
  */
 model StudyActivity {
   id        String   @id @default(cuid())
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId    String
-  /**
-   * Stores just the date (no time). Postgres DATE column.
-   */
   date      DateTime @db.Date
-  /**
-   * How much study happened that day (sets studied, sessions, etc.)
-   */
   studied   Int      @default(1)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([userId, date])
   @@index([userId, date])
+}
+
+/**
+ * =========================
+ * Bayesian Knowledge Tracing (BKT)
+ * =========================
+ */
+
+/**
+ * A skill/concept that cards can exercise.
+ * Supports optional hierarchy (e.g., Science -> Biology).
+ */
+model Skill {
+  id       String @id @default(cuid())
+  name     String // display name (casing preserved)
+  nameNorm String @unique // NEW: lowercase + single-spaced + trimmed
+
+  parentId String?
+  parent   Skill?  @relation("SkillHierarchy", fields: [parentId], references: [id])
+  children Skill[] @relation("SkillHierarchy")
+
+  aliases SkillAlias[]
+  params  BKTParams?
+
+  // Reverse relations
+  cards      CardSkill[]
+  sets       StudySet[]         @relation("StudySet_defaultSkill") // backref for defaultSkill
+  userSkills UserSkill[] // backref for UserSkill
+  masteries  UserSkillMastery[] // backref for UserSkillMastery
+  responses  Response[] // backref for Response
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Personal library of skills a user “has”
+model UserSkill {
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  skill     Skill    @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  skillId   String
+  createdAt DateTime @default(now())
+
+  @@id([userId, skillId])
+  @@index([skillId])
+}
+
+/**
+ * Alternate labels for a skill (authoring/search convenience).
+ */
+model SkillAlias {
+  id      String @id @default(cuid())
+  skill   Skill  @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  skillId String
+  label   String
+
+  @@unique([skillId, label])
+  @@index([label])
+}
+
+/**
+ * Q-matrix mapping: which skills a card exercises (allowing multi-skill).
+ * MVP can use single skill per card; schema supports many.
+ */
+model CardSkill {
+  card    Card   @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  cardId  String
+  skill   Skill  @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  skillId String
+  weight  Float  @default(1.0) // future: weighted updates
+
+  @@id([cardId, skillId])
+  @@index([skillId])
+}
+
+/**
+ * Global/skill-level BKT parameters.
+ * pInit (P(L0)), pTransit (learn), slip, guess; optional forget.
+ */
+model BKTParams {
+  skill    Skill  @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  skillId  String @id
+  pInit    Float
+  pTransit Float
+  slip     Float
+  guess    Float
+  forget   Float? // optional
+
+  updatedAt DateTime @updatedAt
+}
+
+/**
+ * Per-user belief of mastery for each skill: latest P(L_t).
+ */
+model UserSkillMastery {
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  skill     Skill    @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  skillId   String
+  pKnow     Float
+  updatedAt DateTime @updatedAt
+
+  @@id([userId, skillId])
+  @@index([skillId])
+}
+
+/**
+ * Raw response log for analytics and audit.
+ * Denormalized skillId for fast skill-based queries.
+ */
+model Response {
+  id         String   @id @default(cuid())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId     String
+  card       Card     @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  cardId     String
+  skill      Skill    @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  skillId    String
+  correct    Boolean
+  confidence Int?
+  timeMs     Int?
+  createdAt  DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([skillId, createdAt])
+  @@index([cardId, createdAt])
 }
