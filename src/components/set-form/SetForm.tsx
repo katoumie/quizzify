@@ -11,6 +11,7 @@ import SkillCombo from "./SkillCombo";
 import Progress from "./Progress";
 import MergeButton from "@/components/set-form/MergeButton";
 import SettingsMenu from "@/components/set-form/SettingsMenu";
+import GenerateAIModal, { type GenerateAIOptions } from "./GenerateAIModal"; // ← NEW
 
 import {
   SESSION_KEY,
@@ -81,6 +82,12 @@ function extractCardSkillName(c: any): string | null {
   return null;
 }
 
+function getInitialVisibility(data?: SetFormInitialData): Visibility {
+  const v = (data as any)?.visibility as Visibility | undefined;
+  if (v === "public" || v === "private" || v === "friends") return v;
+  return data?.isPublic ? "public" : "private";
+}
+
 export default function SetForm({
   mode,
   initialData,
@@ -134,7 +141,12 @@ export default function SetForm({
         ]
   );
 
-  const [isPublic, setIsPublic] = useState<boolean>(initialData?.isPublic ?? false);
+  /** ---------- Privacy (visibility + isPublic for backend compatibility) ---------- */
+  const derivedVisibility: Visibility = getInitialVisibility(initialData);
+
+  const [visibility, setVisibility] = useState<Visibility>(derivedVisibility);
+  const [isPublic, setIsPublic] = useState<boolean>(initialData?.isPublic ?? (derivedVisibility === "public"));
+
   const [saving, setSaving] = useState(false);
 
   // Default skill for the set (shown in SkillCombo) — seed immediately if present
@@ -151,14 +163,32 @@ export default function SetForm({
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
 
-  // AI upload
+  // AI modal state (UI-only)
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiOpts, setAiOpts] = useState<GenerateAIOptions>({
+    mode: "balanced",
+    reasoningPct: 80, // default to 20% recall / 80% reasoning
+    readingLevel: "standard",
+    answerLength: "short",
+    useSourcePhrasing: false,
+    citations: false,
+    subjectHint: "",
+  });
+
+  // Legacy hidden input (kept as fallback)
   const aiFileRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (!initialData) return;
+
     setTitle(initialData.title ?? "");
     setDescription(initialData.description ?? "");
-    setIsPublic(Boolean(initialData.isPublic));
+
+    // When editing, prefer the visibility string if present; fall back to isPublic.
+    const nextVisibility: Visibility = getInitialVisibility(initialData);
+
+    setVisibility(nextVisibility);
+    setIsPublic(nextVisibility === "public"); // friends/private => non-public
 
     // Seed default set skill from whatever shape arrived
     setSkill(extractDefaultSkillName(initialData));
@@ -305,11 +335,22 @@ export default function SetForm({
   };
 
   /** ---------- AI upload (multi-file; up to 3) ---------- */
-  const handleAIUploadClick = () => aiFileRef.current?.click();
+  const handleAIUploadClick = () => aiFileRef.current?.click(); // fallback (kept)
 
-  async function generateFromSingleFile(file: File) {
+  // UPDATED: accept optional optsOverride so we always send the freshest modal options
+  async function generateFromSingleFile(file: File, optsOverride?: GenerateAIOptions) {
+    const opts = optsOverride ?? aiOpts;
+
     const formData = new FormData();
     formData.append("file", file);
+
+    // pass modal behavior options to the API
+    formData.append("mode", opts.mode);
+    formData.append("reasoningPct", String(opts.reasoningPct));
+    formData.append("answerLength", opts.answerLength);
+    formData.append("useSourcePhrasing", String(opts.useSourcePhrasing));
+    formData.append("subjectHint", opts.subjectHint || "");
+
     const res = await fetch(`/api/generate-from-ai`, { method: "POST", body: formData });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -326,10 +367,14 @@ export default function SetForm({
     const selected = Array.from(e.target.files ?? []);
     e.target.value = "";
     if (!selected.length) return;
+    await handleAIFilesSelected(selected, aiOpts); // ensure latest opts even via legacy picker
+  };
 
+  // UPDATED: accept optsOverride and thread it through to generateFromSingleFile
+  async function handleAIFilesSelected(selectedFiles: File[], optsOverride?: GenerateAIOptions) {
     // HARD cap to 3 files — ignore extras, and notify
-    let files = selected.slice(0, 3);
-    if (selected.length > 3) alert("You selected more than 3 files. Only the first 3 will be processed.");
+    let files = selectedFiles.slice(0, 3);
+    if (selectedFiles.length > 3) alert("You selected more than 3 files. Only the first 3 will be processed.");
 
     // simple size guard: 25MB each
     const tooBig = files.find((f) => f.size > 25 * 1024 * 1024);
@@ -348,7 +393,7 @@ export default function SetForm({
       for (let i = 0; i < files.length; i++) {
         const f = files[i];
         setProgress({ current: i, total: files.length, label: `Reading "${f.name}"…` });
-        const data = await generateFromSingleFile(f);
+        const data = await generateFromSingleFile(f, optsOverride);
         setProgress({ current: i + 0.5, total: files.length, label: `Synthesizing cards from "${f.name}"…` });
 
         const incoming: CardUI[] =
@@ -388,7 +433,7 @@ export default function SetForm({
       setGenerating(false);
       setProgress(null);
     }
-  };
+  }
 
   /** ---------- Upload images to Blob ---------- */
   async function uploadFilesAndGetUrls(card: CardUI): Promise<string | null> {
@@ -470,7 +515,7 @@ export default function SetForm({
             ownerId, // required
             title: title.trim(),
             description: description.trim() || null,
-            isPublic,
+            isPublic, // backend compatibility
             defaultSkill: skill ?? null, // persist default skill
             cards: cleanCards, // includes tri-state fields
           }),
@@ -486,7 +531,7 @@ export default function SetForm({
             ownerId, // so the route can upsert UserSkill on edit
             title: title.trim(),
             description: description.trim() || null,
-            isPublic,
+            isPublic, // backend compatibility
             defaultSkill: skill ?? null, // persist default skill
             cards: cleanCards, // includes tri-state fields
           }),
@@ -507,12 +552,13 @@ export default function SetForm({
     alert("Merge coming soon");
   };
 
-  /** ---------- Privacy dropdown state ---------- */
-  const [visibility, setVisibility] = useState<Visibility>("public");
+  /** ---------- Privacy dropdown change handler ---------- */
   const handleVisibilityChange = (v: Visibility) => {
     setVisibility(v);
-    if (v === "public") setIsPublic(true);
-    if (v === "private") setIsPublic(false);
+    // Map to legacy boolean:
+    // - public => true
+    // - private/friends => false
+    setIsPublic(v === "public");
   };
 
   /** ---------- Set default skill (does NOT stamp per-item) ---------- */
@@ -525,6 +571,9 @@ export default function SetForm({
   if (mode === "edit" && !initialData) {
     return null; // or a tiny skeleton/spinner if you prefer
   }
+
+  // For the modal’s count preview
+  const maxRemaining = Math.max(0, AI_MAX_CARDS - cards.length); // ← NEW
 
   return (
     <section className="mx-auto max-w-5xl">
@@ -541,6 +590,8 @@ export default function SetForm({
             onChangeWarn={setWarnOnNoSkill}
             onChangeAutosave={setAutosave}
           />
+
+          {/* Controlled PrivacyMenu seeded from initialData */}
           <PrivacyMenu value={visibility} onChange={handleVisibilityChange} />
 
           <button
@@ -601,7 +652,7 @@ export default function SetForm({
         <div className="flex items-center gap-3">
           <button
             type="button"
-            onClick={handleAIUploadClick}
+            onClick={() => setAiOpen(true)}
             disabled={generating}
             className={[
               "inline-flex items-center gap-1.5 rounded-[6px]",
@@ -660,7 +711,7 @@ export default function SetForm({
               definition={card.definition}
               skill={card.skill}
               // If this card is explicit None, we want "None" in the chip; otherwise show set default
-              defaultSkillLabel={card._explicitNone ? "None" : (skill ?? "None")}
+              defaultSkillLabel={card._explicitNone ? "None" : skill ?? "None"}
               previewUrl={card._preview || card.imageUrl || null}
               onChangeTerm={updateCardField(i, "term")}
               onChangeDefinition={updateCardField(i, "definition")}
@@ -709,6 +760,25 @@ export default function SetForm({
           </div>
         </div>
       )}
+
+      {/* Generate AI Modal */}
+      <GenerateAIModal
+        open={aiOpen}
+        onClose={() => setAiOpen(false)}
+        maxCards={maxRemaining || AI_MAX_CARDS}
+        initial={aiOpts}
+        onConfirm={(opts) => {
+          setAiOpts(opts); // persist user choices on page
+          setAiOpen(false);
+          if (!opts.files?.length) {
+            // Fallback (shouldn't happen because modal disables Generate without files)
+            handleAIUploadClick();
+            return;
+          }
+          // pass the freshest options straight through
+          handleAIFilesSelected(opts.files, opts);
+        }}
+      />
 
       {/* Minimal dark scrollbar */}
       <style jsx global>{`

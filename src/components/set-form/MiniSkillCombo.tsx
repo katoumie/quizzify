@@ -1,13 +1,54 @@
 // /src/components/set-form/MiniSkillCombo.tsx
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import SvgFileIcon from "@/components/SvgFileIcon";
-import { INPUT_BASE, INPUT_BG, SESSION_KEY } from "./constants"; // ← add SESSION_KEY
+import { INPUT_BASE, INPUT_BG, SESSION_KEY } from "./constants";
 
 type Dir = "asc" | "desc";
 const SKILL_MAX_LEN = 40;
 const SKILL_MIN_LEN = 2;
+
+/** Keeps the menu within the viewport using fixed positioning */
+function useSmartMenuPosition(
+  open: boolean,
+  triggerRef: React.RefObject<HTMLElement | null>,
+  menuRef: React.RefObject<HTMLElement | null>
+) {
+  const [style, setStyle] = useState<React.CSSProperties>({ position: "fixed", opacity: 0 });
+
+  const update = useCallback(() => {
+    if (!open || !triggerRef.current || !menuRef.current) return;
+
+    const pad = 8;  // viewport padding
+    const gap = 6;  // space below trigger
+    const r = triggerRef.current.getBoundingClientRect();
+    const vw = window.innerWidth;
+
+    const width = Math.min(380, Math.max(240, vw - pad * 2));
+    const leftIdeal = r.left;
+    const left = Math.max(pad, Math.min(leftIdeal, vw - width - pad));
+    const top = r.bottom + gap;
+
+    setStyle({ position: "fixed", top, left, width });
+  }, [open, triggerRef, menuRef]);
+
+  useLayoutEffect(() => { update(); }, [update, open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onScroll = () => update();
+    const onResize = () => update();
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onResize);
+    };
+  }, [open, update]);
+
+  return style;
+}
 
 export default function MiniSkillCombo({
   value,
@@ -24,6 +65,7 @@ export default function MiniSkillCombo({
 
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const btnRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const rowRefs = useRef<(HTMLButtonElement | HTMLDivElement | null)[]>([]);
@@ -43,6 +85,9 @@ export default function MiniSkillCombo({
       document.removeEventListener("keydown", onKey);
     };
   }, [open]);
+
+  // Viewport-aware menu style
+  const menuStyle = useSmartMenuPosition(open, btnRef, menuRef);
 
   // Wired to API
   const [yourSkills, setYourSkills] = useState<string[]>([]);
@@ -64,12 +109,8 @@ export default function MiniSkillCombo({
     }
   };
 
-  useEffect(() => {
-    refreshSkills();
-  }, []);
-  useEffect(() => {
-    if (open) refreshSkills();
-  }, [open]);
+  useEffect(() => { refreshSkills(); }, []);
+  useEffect(() => { if (open) refreshSkills(); }, [open]);
 
   const norm = (s: string) => s.trim().toLowerCase();
   const sanitize = (s: string) => s.replace(/\s+/g, " ").trim().slice(0, SKILL_MAX_LEN);
@@ -210,13 +251,14 @@ export default function MiniSkillCombo({
         <SvgFileIcon src="/icons/dropdown.svg" className="h-3.5 w-3.5 text-white/80" />
       </button>
 
-      {/* Popup — same sizing as SkillCombo */}
+      {/* Popup — now viewport-aware (fixed + clamped) */}
       <div
+        ref={menuRef}
         role="listbox"
-        className={`absolute right-0 mt-2 w-[380px] overflow-hidden rounded-lg border border-white/15 shadow-lg transition z-[70] ${
+        className={`fixed overflow-hidden rounded-lg border border-white/15 shadow-lg transition z-[70] ${
           open ? "opacity-100 scale-100" : "pointer-events-none opacity-0 scale-95"
         }`}
-        style={{ backgroundColor: "var(--bg, #18062e)" }}
+        style={{ ...menuStyle, backgroundColor: "var(--bg, #18062e)" }}
       >
         {/* Top bar (search + sort) */}
         <div className="p-2 flex items-center gap-2">

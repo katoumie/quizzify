@@ -243,7 +243,7 @@ export default function SkillCombo({
           <button
             type="button"
             onClick={() => setSortDir((d) => (d === "asc" ? "desc" : "asc"))}
-            className="grid h-9 w-9 place-items-center rounded-md text-white/80 hover:text-white ring-1 ring-white/12 hover:bg:white/10"
+            className="grid h-9 w-9 place-items-center rounded-md text-white/80 hover:text-white ring-1 ring-white/12 hover:bg-white/10"
             title={sortDir === "asc" ? "Sort: A → Z" : "Sort: Z → A"}
             aria-label="Toggle sort"
           >
@@ -262,7 +262,7 @@ export default function SkillCombo({
 
             if (r.kind === "section") {
               return (
-                <div key={r.id} ref={setRowRef(i)} className="px-3 py-1 text-xs text:white/60">
+                <div key={r.id} ref={setRowRef(i)} className="px-3 py-1 text-xs text-white/60">
                   {r.label}
                 </div>
               );
@@ -299,7 +299,7 @@ export default function SkillCombo({
                   className={[
                     "flex w-[calc(100%-24px)] items-center justify-between px-3 py-2 text-sm rounded-md mx-3",
                     "text-white/90 hover:bg-white/10",
-                    isActive ? "bg-white/10 ring-1 ring-white/10" : "",
+                    isActive ? "bg-white/10" : "",
                   ].join(" ")}
                 >
                   <span className="truncate">{r.label}</span>
@@ -320,7 +320,7 @@ export default function SkillCombo({
                   className={[
                     "flex w-[calc(100%-24px)] items-center justify-between px-3 py-2 text-sm rounded-md mx-3",
                     "text-white/90 hover:bg-white/10",
-                    isActive ? "bg-white/10 ring-1 ring:white/10" : "",
+                    isActive ? "bg-white/10" : "",
                   ].join(" ")}
                 >
                   <span>None</span>
@@ -342,7 +342,7 @@ export default function SkillCombo({
                   className={[
                     "flex w-[calc(100%-24px)] items-center justify-between px-3 py-2 text-sm rounded-md mx-3",
                     "text-white hover:bg-white/10",
-                    isActive ? "bg-white/10 ring-1 ring-white/10" : "",
+                    isActive ? "bg-white/10" : "",
                   ].join(" ")}
                 >
                   <span className="truncate">Create “{qSan}”</span>
@@ -363,7 +363,7 @@ export default function SkillCombo({
                 className={[
                   "flex w-[calc(100%-24px)] items-center justify-between px-3 py-2 text-sm rounded-md mx-3",
                   "text-white/90 hover:bg-white/10",
-                  isActive ? "bg-white/10 ring-1 ring-white/10" : "",
+                  isActive ? "bg-white/10" : "",
                 ].join(" ")}
               >
                 <span className="truncate">{r.label}</span>

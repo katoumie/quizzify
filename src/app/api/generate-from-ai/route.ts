@@ -1,9 +1,7 @@
+// /src/app/api/generate-from-ai/route.ts
 import { NextResponse } from "next/server";
 import { openai } from "@/lib/ai";
 import mammoth from "mammoth";
-import { mkdtemp, writeFile } from "fs/promises";
-import { tmpdir } from "os";
-import { join } from "path";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -14,6 +12,17 @@ type OutSet = { title: string | null; description: string | null; cards: OutCard
 const MAX_CHARS = 60_000;
 const CHUNK_SIZE = 12_000;
 const MAX_CARDS = 50;
+
+type GenMode = "recall" | "balanced" | "reasoning";
+type AnswerLen = "short" | "medium" | "detailed";
+
+type GenOptions = {
+  mode: GenMode;
+  reasoningPct: number;        // 0..100 (used only when balanced)
+  answerLength: AnswerLen;
+  useSourcePhrasing: boolean;
+  subjectHint: string;
+};
 
 export async function POST(req: Request) {
   try {
@@ -26,11 +35,20 @@ export async function POST(req: Request) {
     const file = form.get("file") as File | null;
     if (!file) return NextResponse.json({ error: "Missing file" }, { status: 400 });
 
+    // NEW: optional behavior inputs from the modal
+    const opts: GenOptions = {
+      mode: (String(form.get("mode") || "balanced") as GenMode),
+      reasoningPct: clampInt(Number(form.get("reasoningPct") ?? 80), 0, 100),
+      answerLength: (String(form.get("answerLength") || "short") as AnswerLen),
+      useSourcePhrasing: String(form.get("useSourcePhrasing") || "false") === "true",
+      subjectHint: String(form.get("subjectHint") || ""),
+    };
+
     const contentType = file.type || "";
     const name = file.name || "upload";
     const buf = Buffer.from(await file.arrayBuffer());
 
-    console.log("[AI] Upload received:", { name, contentType, size: buf.byteLength });
+    console.log("[AI] Upload received:", { name, contentType, size: buf.byteLength, opts });
 
     // 1) Extract text
     let rawText: string;
@@ -52,10 +70,10 @@ export async function POST(req: Request) {
     const text = rawText.slice(0, MAX_CHARS);
     console.log("[AI] Extracted chars:", text.length);
 
-    // 2) Build study set via OpenAI
+    // 2) Build study set via OpenAI (now behavior-aware)
     let structured: OutSet;
     try {
-      structured = await buildStudySet(text);
+      structured = await buildStudySet(text, opts);
     } catch (e: any) {
       console.error("[AI] OpenAI call failed:", e);
       return NextResponse.json({ error: `OpenAI failed (${e?.message || "unknown error"})` }, { status: 500 });
@@ -66,10 +84,12 @@ export async function POST(req: Request) {
     const pruned: OutCard[] = cards
       .filter((c) => c?.term && c?.definition)
       .slice(0, MAX_CARDS)
-      .map((c) => ({
-        term: String(c.term).slice(0, 200),
-        definition: String(c.definition).slice(0, 600),
-      }));
+      .map((c) => {
+        const term = String(c.term).slice(0, 200);
+        const definitionRaw = String(c.definition).slice(0, 600);
+        const definition = deLeak(term, definitionRaw); // ← remove term leakage
+        return { term, definition };
+      });
 
     const payload: OutSet = {
       title: (structured.title || fallbackTitle(name))?.slice(0, 120) ?? "Study Set",
@@ -92,6 +112,11 @@ export async function POST(req: Request) {
 
 /** ---------------- helpers ---------------- */
 
+function clampInt(n: number, min: number, max: number) {
+  if (!Number.isFinite(n)) return min;
+  return Math.max(min, Math.min(max, Math.round(n)));
+}
+
 function fallbackTitle(filename: string) {
   return filename.replace(/\.[^.]+$/, "").replace(/[-_]/g, " ").trim() || "Study Set";
 }
@@ -100,69 +125,40 @@ async function extractText(buf: Buffer, contentType: string, filename: string): 
   const lc = (contentType || "").toLowerCase();
   const ext = (filename.split(".").pop() || "").toLowerCase();
 
-  // PDF — lazy import; treat module as any (avoids TS declaration error)
   if (lc.includes("pdf") || ext === "pdf") {
-    // NOTE: we import the ESM path directly to avoid package side-effects
     const mod: any = await import("pdf-parse/lib/pdf-parse.js");
     const pdfParse: any = mod.default || mod;
     const res = await pdfParse(buf);
     return (res && res.text) || "";
   }
 
-  // DOCX — mammoth to HTML, then strip tags
   if (lc.includes("officedocument.wordprocessingml") || ext === "docx") {
     const { value: html } = await mammoth.convertToHtml({ buffer: buf });
     return htmlToText(html);
   }
 
-  // PPTX — lazy import parser; write temp file since parser wants a path
   if (lc.includes("officedocument.presentationml") || lc.includes("powerpoint") || ext === "pptx") {
     const { default: JSZip } = await import("jszip");
-
-    // 1) Load ZIP
     const zip = await JSZip.loadAsync(buf);
-
-    // 2) Grab slide XML files
     const slideFiles = Object.keys(zip.files)
       .filter((p) => p.startsWith("ppt/slides/slide") && p.endsWith(".xml"))
-      .sort((a, b) => {
-        // natural sort by slide number
-        const na = Number(a.match(/slide(\d+)\.xml$/)?.[1] || 0);
-        const nb = Number(b.match(/slide(\d+)\.xml$/)?.[1] || 0);
-        return na - nb;
-      });
-
-    // 3) Extract all <a:t>text</a:t> runs
+      .sort((a, b) => Number(a.match(/slide(\d+)\.xml$/)?.[1] || 0) - Number(b.match(/slide(\d+)\.xml$/)?.[1] || 0));
     const decode = (s: string) =>
-      s
-        .replace(/&amp;/g, "&")
-        .replace(/&lt;/g, "<")
-        .replace(/&gt;/g, ">")
-        .replace(/&quot;/g, '"')
-        .replace(/&apos;/g, "'");
-
+      s.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'");
     const slideTexts: string[] = [];
     for (const path of slideFiles) {
       const xml = await zip.files[path].async("string");
-      // collect all text runs (PowerPoint uses a:t for text)
       const runs = Array.from(xml.matchAll(/<a:t[^>]*>([\s\S]*?)<\/a:t>/g)).map((m) => decode(m[1]).trim());
-      const notes = Array.from(xml.matchAll(/<p:notes[^>]*>([\s\S]*?)<\/p:notes>/g)).map((m) => decode(m[1]).trim()); // rarely present in slide xml
+      const notes = Array.from(xml.matchAll(/<p:notes[^>]*>([\s\S]*?)<\/p:notes>/g)).map((m) => decode(m[1]).trim());
       const text = [...runs, ...notes].filter(Boolean).join("\n").trim();
       if (text) slideTexts.push(text);
     }
-
     const all = slideTexts.join("\n\n");
     if (all.trim()) return all;
 
-    // As a last resort, try pulling text from most common “notesSlides” too
     const noteFiles = Object.keys(zip.files)
       .filter((p) => p.startsWith("ppt/notesSlides/notesSlide") && p.endsWith(".xml"))
-      .sort((a, b) => {
-        const na = Number(a.match(/notesSlide(\d+)\.xml$/)?.[1] || 0);
-        const nb = Number(b.match(/notesSlide(\d+)\.xml$/)?.[1] || 0);
-        return na - nb;
-      });
-
+      .sort((a, b) => Number(a.match(/notesSlide(\d+)\.xml$/)?.[1] || 0) - Number(b.match(/notesSlide(\d+)\.xml$/)?.[1] || 0));
     const noteTexts: string[] = [];
     for (const path of noteFiles) {
       const xml = await zip.files[path].async("string");
@@ -170,11 +166,9 @@ async function extractText(buf: Buffer, contentType: string, filename: string): 
       const text = runs.filter(Boolean).join("\n").trim();
       if (text) noteTexts.push(text);
     }
-
     return noteTexts.join("\n\n");
   }
 
-  // Plain text fallback
   return buf.toString("utf8");
 }
 
@@ -189,13 +183,57 @@ function htmlToText(html: string) {
     .trim();
 }
 
+// --- NEW: remove obvious term leakage from definitions ---
+function deLeak(term: string, def: string): string {
+  if (!term || !def) return def;
+
+  // Normalize term into tokens
+  const stop = new Set([
+    "what","which","who","where","when","why","how","is","are","was","were","do","does","did",
+    "the","a","an","of","to","in","on","for","and","or","with","from","that","this","these","those"
+  ]);
+  const clean = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s-]/g, " ").replace(/\s+/g, " ").trim();
+  const termTokens = clean(term).split(" ").filter(w => w && !stop.has(w));
+
+  if (termTokens.length === 0) return def;
+
+  // Build candidate phrases (prefer longer n-grams found in the definition)
+  const defLC = clean(def);
+  const phrases: string[] = [];
+  for (let n = Math.min(5, termTokens.length); n >= 2; n--) {
+    for (let i = 0; i <= termTokens.length - n; i++) {
+      const p = termTokens.slice(i, i + n).join(" ");
+      if (defLC.includes(p)) phrases.push(p);
+    }
+  }
+  // If nothing multi-word matched, try a notable single word (>=3 chars) that appears in the def
+  if (!phrases.length) {
+    const single = termTokens.find(w => w.length >= 3 && defLC.includes(w));
+    if (single) phrases.push(single);
+  }
+
+  if (!phrases.length) return def;
+
+  // Replace, longest first
+  const escapeRx = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  let out = def;
+  Array.from(new Set(phrases))
+    .sort((a, b) => b.length - a.length)
+    .forEach(p => {
+      const re = new RegExp(`\\b${escapeRx(p)}\\b`, "gi");
+      out = out.replace(re, (m) => (/[A-Z]/.test(m[0]) ? "It" : "it"));
+    });
+
+  return out.replace(/\s{2,}/g, " ").replace(/\s+([,.!?;:])/g, "$1").trim();
+}
+
 function chunkString(s: string, size: number) {
   const out: string[] = [];
   for (let i = 0; i < s.length; i += size) out.push(s.slice(i, i + size));
   return out;
 }
 
-async function buildStudySet(text: string): Promise<OutSet> {
+async function buildStudySet(text: string, opts: GenOptions): Promise<OutSet> {
   const chunks = chunkString(text, CHUNK_SIZE);
 
   const perChunkCards: OutCard[] = [];
@@ -203,24 +241,29 @@ async function buildStudySet(text: string): Promise<OutSet> {
     const remaining = MAX_CARDS - perChunkCards.length;
     if (remaining <= 0) break;
 
-    const { cards } = await askOpenAI({
-      mode: "cards-only",
-      body: chunk,
-      index: i + 1,
-      total: chunks.length,
-      // @ts-ignore – we’ll read this in askOpenAI via a type guard
-      desiredCount: Math.min(30, remaining), // try to fetch up to 30 per chunk, but not beyond remaining
-    });
+    const { cards } = await askOpenAI(
+      {
+        mode: "cards-only",
+        body: chunk,
+        index: i + 1,
+        total: chunks.length,
+        desiredCount: Math.min(30, remaining),
+      },
+      opts
+    );
 
     if (Array.isArray(cards)) perChunkCards.push(...cards);
     if (perChunkCards.length >= MAX_CARDS) break;
   }
 
-  const final = await askOpenAI({
-    mode: "title-and-description",
-    body: text.slice(0, 8000),
-    seedCards: perChunkCards.slice(0, MAX_CARDS),
-  });
+  const final = await askOpenAI(
+    {
+      mode: "title-and-description",
+      body: text.slice(0, 8000),
+      seedCards: perChunkCards.slice(0, MAX_CARDS),
+    },
+    opts
+  );
 
   return {
     title: final.title || "Study Set",
@@ -229,31 +272,81 @@ async function buildStudySet(text: string): Promise<OutSet> {
   };
 }
 
-
 type AskArgs =
-  | { mode: "cards-only"; body: string; index: number; total: number; seedCards?: OutCard[]; desiredCount?: number }
+  | { mode: "cards-only"; body: string; index: number; total: number; desiredCount?: number }
   | { mode: "title-and-description"; body: string; seedCards: OutCard[] };
 
-async function askOpenAI(args: AskArgs): Promise<OutSet> {
+function lengthRule(len: AnswerLen) {
+  switch (len) {
+    case "short":
+      return "Definitions must be 1–2 tight sentences.";
+    case "medium":
+      return "Definitions must be 2–3 concise sentences.";
+    case "detailed":
+      return "Definitions may be 3–5 compact sentences; avoid fluff.";
+  }
+}
+
+function styleRules(opts: GenOptions) {
+  const base = [
+    "Return objects with {term, definition} only. No numbering or extra commentary.",
+    "Do NOT include the words 'Source:', 'Output Term:', or 'Output Definition:'.",
+    opts.useSourcePhrasing
+      ? "Stay close to the document's phrasing when possible (light edits for clarity)."
+      : "Paraphrase in your own words; avoid quoting entire sentences from the source.",
+    lengthRule(opts.answerLength),
+  ];
+
+  if (opts.mode === "recall") {
+    base.push(
+      "Create straightforward recall cards.",
+      "term = the key concept or prompt.",
+      "definition = the precise explanation/answer."
+    );
+  } else if (opts.mode === "reasoning") {
+    base.push(
+      "Create applied, real-world, scenario-style questions that require inference.",
+      "term = a 'why/how/which/what happens if...' style question (6–18 words).",
+      "definition = the concise reasoning that invokes the underlying principle.",
+      "Avoid trivial 'What is...' prompts."
+    );
+  } else {
+    // balanced
+    base.push(
+      `Blend of recall and reasoning. Roughly ${opts.reasoningPct}% reasoning, ${100 - opts.reasoningPct}% recall.`,
+      "Interleave both types."
+    );
+  }
+
+  if (opts.subjectHint) {
+    base.push(`When choosing topics, prioritize relevance to: "${opts.subjectHint}".`);
+  }
+  return base.join("\n");
+}
+
+async function askOpenAI(args: AskArgs, opts: GenOptions): Promise<OutSet> {
   const system = `You are an expert study-set generator. Extract crisp "term" → "definition" pairs from the document text.
-Prefer concise, correct, self-contained definitions. Skip duplicates and trivial noise.`;
+    Prefer concise, correct, self-contained definitions. Skip duplicates and trivial noise.
 
-  const isCardsOnly = args.mode === "cards-only";
-  const desired = isCardsOnly ? Math.max(1, Math.min(args.desiredCount ?? 30, MAX_CARDS)) : undefined;
+    IMPORTANT RULES
+    - Do NOT repeat the exact term (or its key subject words) inside the definition.
+      Use neutral referents like "it", "they", "this process", "this law", etc.
+    - Keep definitions 1–2 sentences, direct, and free of fluff.`;
 
-  const user = isCardsOnly
-    ? `CHUNK ${args.index}/${args.total}
-Return up to ${desired} high-quality, non-duplicate cards from this chunk. Prioritize distinct, useful concepts.
+  const user =
+    args.mode === "cards-only"
+      ? `CHUNK ${args.index}/${args.total}
+From this text, return up to ${Math.max(1, Math.min(args.desiredCount ?? 30, MAX_CARDS))} high-quality cards.
 
 TEXT:
-"""${args.body}"""`
-    : `Using the provided sample of the document and the preliminary cards,
-1) Propose a short, descriptive Title.
-2) Propose a concise Description (<= 1-2 sentences).
-3) Return a final list of cards (you may refine/merge/trim seed cards).
+"""${args.body}"""` 
+      : `Using the provided sample and seed cards, propose:
+1) Title (short)
+2) Description (<= 2 sentences)
+3) A refined final list of cards (you may merge/deduplicate/trim).
 
 SEED_CARDS:
-${JSON.stringify(args.seedCards ?? [], null, 2)}
+${JSON.stringify((args as any).seedCards ?? [], null, 2)}
 
 TEXT_SAMPLE:
 """${args.body}"""`;
@@ -292,7 +385,7 @@ TEXT_SAMPLE:
     model: "gpt-4o-mini",
     messages: [
       { role: "system", content: system },
-      { role: "user", content: user },
+      { role: "user", content: [styleRules(opts), "", user].join("\n") },
     ],
     tools,
     tool_choice: { type: "function", function: { name: "return_study_set" } },
@@ -303,9 +396,9 @@ TEXT_SAMPLE:
   let parsed: any = null;
 
   const tc = msg?.tool_calls?.[0];
-  if (tc && tc.type === "function" && "function" in tc && tc.function?.arguments) {
+  if (tc && tc.type === "function" && "function" in tc && (tc as any).function?.arguments) {
     try {
-      parsed = JSON.parse(tc.function.arguments);
+      parsed = JSON.parse((tc as any).function.arguments);
     } catch {
       parsed = null;
     }

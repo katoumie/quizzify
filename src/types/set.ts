@@ -24,3 +24,5 @@ export type SetFormInitialData = {
 
   cards?: Card[];
 };
+
+export type Visibility = "public" | "private" | "friends";
