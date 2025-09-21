@@ -88,6 +88,27 @@ function getInitialVisibility(data?: SetFormInitialData): Visibility {
   return data?.isPublic ? "public" : "private";
 }
 
+function SplitText({ text, className = "" }: { text: string; className?: string }) {
+  return (
+    <div className={className} aria-label={text}>
+      {Array.from(text).map((ch, i) => (
+        <span
+          key={i}
+          className={`rb-split-char ${i % 2 ? "down" : "up"}`}
+          style={{ ["--d" as any]: `${i * 50}ms` } as any}
+        >
+          {ch === " " ? "\u00A0" : ch}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function ShinyText({ text, className = "" }: { text: string; className?: string }) {
+  return <div className={`rb-shiny ${className}`}>{text}</div>;
+}
+
+
 export default function SetForm({
   mode,
   initialData,
@@ -748,18 +769,40 @@ export default function SetForm({
 
       {/* Full-screen loading overlay */}
       {generating && (
-        <div className="fixed inset-0 z-[9999] grid place-items-center bg-black/60 backdrop-blur-sm">
-          <div className="w-[min(520px,92vw)] rounded-xl bg-white/10 p-4 ring-1 ring-white/15 text-white">
-            <div className="mb-2 text-sm font-medium">
-              {progress?.label || "Analyzing file(s) and generating cards…"}
-            </div>
-            <Progress value={progress ? (progress.current / progress.total) * 100 : 12} />
-            <div className="mt-2 text-xs text-white/70">
-              {progress ? `Processed ${Math.min(progress.current, progress.total)} of ${progress.total}` : "Working…"}
-            </div>
+        <div className="fixed inset-0 z-[9999] grid place-items-center bg-black/80 backdrop-blur-sm">
+          {/* Particles backdrop (behind text, no pointer events) */}
+
+          {/* Centered content */}
+          <div className="relative text-center text-white px-6">
+            <SplitText
+              {...({
+                text: "Generating your AI study set.",
+                className:
+                  "text-center text-[clamp(28px,4vw,48px)] font-semibold leading-tight",
+                renderChar: (ch: string, i: number) => (
+                  <span
+                    key={i}
+                    className="inline-block will-change-transform"
+                    style={{
+                      // keep things smooth & a bit slower
+                      animationDelay: `${i * 0.045}s`,
+                      animationDuration: "1.1s",
+                    }}
+                  >
+                    {ch}
+                  </span>
+                ),
+              } as any)}
+            />
+            <ShinyText
+              text="This might take a while..."
+              className="mt-5 text-[22px]"  // slightly larger per your request
+            />
           </div>
         </div>
       )}
+
+
 
       {/* Generate AI Modal */}
       <GenerateAIModal
@@ -790,6 +833,48 @@ export default function SetForm({
         .qz-scroll::-webkit-scrollbar-track { background: transparent; }
         .qz-scroll::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.18); border-radius: 9999px; }
         .qz-scroll::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.28); }
+
+        /* Reactbits-like Split Text */
+        .rb-split-char {
+          display: inline-block;
+          will-change: transform, opacity;
+          animation: rb-split-in 600ms var(--d, 0ms) cubic-bezier(.22,1,.36,1) both;
+        }
+        .rb-split-char.up { --from: -60%; }
+        .rb-split-char.down { --from: 60%; }
+        @keyframes rb-split-in {
+          from { opacity: 0; transform: translateY(var(--from)); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Reactbits-like Split Text */
+        .rb-split-char {
+          display: inline-block;
+          will-change: transform, opacity;
+          animation: rb-split-in 900ms var(--d, 0ms) cubic-bezier(.22,1,.36,1) both; /* was 600ms */
+        }
+        .rb-split-char.up { --from: -60%; }
+        .rb-split-char.down { --from: 60%; }
+        @keyframes rb-split-in {
+          from { opacity: 0; transform: translateY(var(--from)); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Reactbits-like Shiny Text */
+        .rb-shiny {
+          background: linear-gradient(90deg, rgba(255,255,255,.25) 0%, #fff 20%, rgba(255,255,255,.25) 40%);
+          background-size: 200% 100%;
+          -webkit-background-clip: text;
+          background-clip: text;
+          color: transparent;
+          animation: rb-shiny 5.0s linear infinite; /* was 2.2s */
+          opacity: .9;
+        }
+        @keyframes rb-shiny {
+          0% { background-position: 200% 0; }
+          100% { background-position: -200% 0; }
+        }
+
       `}</style>
     </section>
   );
