@@ -45,7 +45,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   return (
     <html
       lang="en"
-      className={[mona.variable, geistMono.variable, fredoka.variable, baloo2.variable].join(" ")}
+      className={[mona.variable, geistMono.variable, fredoka.variable, baloo2.variable, "dark"].join(" ")}
       data-sidebar-compact={isCompact ? "1" : "0"}
       style={
         {
