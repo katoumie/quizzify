@@ -253,6 +253,17 @@ model BKTParams {
   updatedAt DateTime @updatedAt
 }
 
+model UserCardMastery {
+  userId    String
+  cardId    String
+  pKnow     Float
+  updatedAt DateTime @updatedAt
+
+  @@id([userId, cardId])
+  @@index([userId])
+  @@index([cardId])
+}
+
 /**
  * Per-user belief of mastery for each skill: latest P(L_t).
  */
