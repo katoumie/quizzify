@@ -1,10 +1,10 @@
-// /src/app/sets/[id]/flashcards/page.tsx
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import Particles from "@/components/Particles";
 import BlurText from "@/components/BlurText";
+import SvgFileIcon from "@/components/SvgFileIcon";
 import { motion, AnimatePresence } from "framer-motion";
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -34,7 +34,6 @@ function padNumber(value: number, places: number) {
   if (s.length >= places) return s.slice(-places);
   return "0".repeat(places - s.length) + s;
 }
-
 function AnimatedCounter({
   value,
   places = 2,
@@ -44,43 +43,20 @@ function AnimatedCounter({
   fontWeight = 900,
   padding = 0,
 }: {
-  value: number;
-  places?: number;
-  fontSize?: number;
-  gap?: number;
-  textColor?: string;
-  fontWeight?: number;
-  padding?: number;
+  value: number; places?: number; fontSize?: number; gap?: number; textColor?: string; fontWeight?: number; padding?: number;
 }) {
   const str = padNumber(value, places);
   return (
-    <div
-      className="flex items-center justify-center"
-      style={{ gap, padding }}
-      aria-label={`counter-${value}`}
-    >
+    <div className="flex items-center justify-center" style={{ gap, padding }} aria-label={`counter-${value}`}>
       {Array.from(str).map((ch, i) => (
-        <div
-          key={`slot-${i}`}
-          className="relative overflow-hidden"
-          style={{ height: fontSize * 1.25, minWidth: fontSize * 0.6 }}
-          aria-hidden="true"
-        >
+        <div key={`slot-${i}`} className="relative overflow-hidden" style={{ height: fontSize * 1.25, minWidth: fontSize * 0.6 }} aria-hidden="true">
           <AnimatePresence initial={false} mode="popLayout">
             <motion.span
               key={`${i}-${ch}`}
-              initial={{ y: -18, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              exit={{ y: 18, opacity: 0 }}
+              initial={{ y: -18, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 18, opacity: 0 }}
               transition={{ duration: 0.18, ease: "easeOut" }}
               className="absolute left-1/2 -translate-x-1/2"
-              style={{
-                fontSize,
-                fontWeight,
-                color: textColor,
-                lineHeight: 1.1,
-                whiteSpace: "pre",
-              }}
+              style={{ fontSize, fontWeight, color: textColor, lineHeight: 1.1, whiteSpace: "pre" }}
             >
               {ch}
             </motion.span>
@@ -112,29 +88,44 @@ function urgencyColor(t: number) {
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   FlashcardDeck — animated deck with flip/correct/incorrect + effects
-   - Draggable top card (right = correct, left = wrong)
-   - Exposes window.__qc.{correct,wrong,flip} for keyboard shortcuts
+   Responsive card sizing (~3×, clamped to viewport)
 ────────────────────────────────────────────────────────────────────────── */
-// Replace your entire FlashcardDeck with this version
+function useCardSize() {
+  const BASE_W = 460, BASE_H = 280, TARGET_SCALE = 3;
+  const ASPECT = BASE_H / BASE_W; // ~0.6087
+  const [size, setSize] = useState<{ width: number; height: number }>({ width: BASE_W * TARGET_SCALE, height: BASE_H * TARGET_SCALE });
+
+  useEffect(() => {
+    function recalc() {
+      const vw = window.innerWidth, vh = window.innerHeight;
+      const padX = 64;           // side padding
+      const padY = 260;          // leave space for HUD/actions
+      const maxW = Math.min(BASE_W * TARGET_SCALE, vw - padX);
+      const maxH = Math.min(BASE_H * TARGET_SCALE, vh - padY);
+      const width = Math.min(maxW, Math.floor(maxH / ASPECT));
+      const height = Math.floor(width * ASPECT);
+      setSize({ width: Math.max(320, width), height: Math.max(200, height) });
+    }
+    recalc();
+    window.addEventListener("resize", recalc);
+    return () => window.removeEventListener("resize", recalc);
+  }, []);
+  return size;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   FlashcardDeck — faces rotate independently (no mirror bug) + glass look
+────────────────────────────────────────────────────────────────────────── */
 function FlashcardDeck({
-  terms,
-  difficulty,
-  onScore,
-  onLifeLost,
-  onDeckProgress,
-  onBurst,
-  onPowerUp,
-  size = { width: 460, height: 280 },
+  terms, difficulty, onScore, onLifeLost, onDeckProgress, onBurst, onPowerUp, size,
 }: {
-  terms: Term[];
-  difficulty: Difficulty;
+  terms: Term[]; difficulty: Difficulty;
   onScore: (pointsGained: number, newStreak: number) => void;
   onLifeLost: () => void;
   onDeckProgress: (cleared: number, total: number) => void;
   onBurst: (kind: "good" | "bad") => void;
   onPowerUp: (kind: "time" | "double" | "freeze") => void;
-  size?: { width: number; height: number };
+  size: { width: number; height: number };
 }) {
   const [order, setOrder] = useState<number[]>(() => terms.map((_, i) => i));
   const [flipped, setFlipped] = useState(false);
@@ -145,10 +136,8 @@ function FlashcardDeck({
 
   useEffect(() => {
     setOrder(terms.map((_, i) => i));
-    setFlipped(false);
-    setAnimState("idle");
-    setCleared(0);
-    setStreak(0);
+    setFlipped(false); setAnimState("idle");
+    setCleared(0); setStreak(0);
   }, [terms]);
 
   const total = terms.length;
@@ -161,68 +150,42 @@ function FlashcardDeck({
   const nextCard = useCallback(() => {
     setOrder((prev) => {
       if (prev.length <= 1) return prev;
-      const [first, ...rest] = prev;
-      return [...rest, first];
+      const [first, ...rest] = prev; return [...rest, first];
     });
-    setFlipped(false);
-    setAnimState("idle");
+    setFlipped(false); setAnimState("idle");
   }, []);
 
   const markCorrect = useCallback(() => {
     if (!top) return;
     setAnimState("right");
     const points = Math.round(base * comboMultiplier);
-    setTimeout(() => {
-      setFloatScore(+points);
-      setTimeout(() => setFloatScore(null), 700);
-    }, 100);
-
-    const newStreak = streak + 1;
-    setStreak(newStreak);
-    onScore(points, newStreak);
-    setCleared((c) => {
-      const n = c + 1;
-      onDeckProgress(n, total);
-      return n;
-    });
+    setTimeout(() => { setFloatScore(+points); setTimeout(() => setFloatScore(null), 700); }, 100);
+    const newStreak = streak + 1; setStreak(newStreak); onScore(points, newStreak);
+    setCleared((c) => { const n = c + 1; onDeckProgress(n, total); return n; });
     onBurst("good");
-
     const roll = Math.random();
-    if (roll < 0.06) onPowerUp("time");
-    else if (roll < 0.12) onPowerUp("freeze");
-    else if (roll < 0.18) onPowerUp("double");
-
+    if (roll < 0.06) onPowerUp("time"); else if (roll < 0.12) onPowerUp("freeze"); else if (roll < 0.18) onPowerUp("double");
     setTimeout(nextCard, 340);
   }, [top, base, comboMultiplier, streak, onScore, onDeckProgress, onBurst, onPowerUp, total, nextCard]);
 
   const markIncorrect = useCallback(() => {
     if (!top) return;
-    setAnimState("left");
-    setStreak(0);
-    onLifeLost();
-    setCleared((c) => {
-      const n = c + 1;
-      onDeckProgress(n, total);
-      return n;
-    });
+    setAnimState("left"); setStreak(0); onLifeLost();
+    setCleared((c) => { const n = c + 1; onDeckProgress(n, total); return n; });
     onBurst("bad");
     setTimeout(nextCard, 340);
   }, [top, onLifeLost, onDeckProgress, total, nextCard]);
 
   // expose keyboard helpers
   useEffect(() => {
-    (window as any).__qc = {
-      correct: () => markCorrect(),
-      wrong: () => markIncorrect(),
-      flip: () => setFlipped((f: boolean) => !f),
-    };
+    (window as any).__qc = { correct: () => markCorrect(), wrong: () => markIncorrect(), flip: () => setFlipped((f: boolean) => !f) };
   }, [markCorrect, markIncorrect]);
 
   const visible = order.slice(0, Math.min(3, order.length));
   const layers = [
     { scale: 1, y: 0, shadow: "shadow-xl", z: 30 },
-    { scale: 0.985, y: 10, shadow: "shadow-lg", z: 20 },
-    { scale: 0.97, y: 18, shadow: "shadow", z: 10 },
+    { scale: 0.985, y: 14, shadow: "shadow-lg", z: 20 },
+    { scale: 0.97, y: 24, shadow: "shadow", z: 10 },
   ];
 
   return (
@@ -233,9 +196,9 @@ function FlashcardDeck({
           const isTop = i === 0;
           const animate =
             isTop && animState === "right"
-              ? { x: 240, rotate: 9, opacity: 0, transition: { duration: 0.32, ease: "easeInOut" } }
+              ? { x: 320, rotate: 9, opacity: 0, transition: { duration: 0.32, ease: "easeInOut" } }
               : isTop && animState === "left"
-              ? { x: -240, rotate: -9, opacity: 0, transition: { duration: 0.32, ease: "easeInOut" } }
+              ? { x: -320, rotate: -9, opacity: 0, transition: { duration: 0.32, ease: "easeInOut" } }
               : { x: 0, rotate: 0, opacity: 1, transition: { duration: 0.26, ease: "easeOut" } };
 
           return (
@@ -249,30 +212,19 @@ function FlashcardDeck({
             >
               {/* Perspective context */}
               <div className="relative w-full h-full select-none" style={{ perspective: 1000 }}>
-                {/* Glass surface – clips overlays inside rounded corners */}
+                {/* Glass surface (static, clips overlays) */}
                 <div
-                  className="absolute inset-0 rounded-2xl overflow-hidden ring-1 backdrop-blur-md shadow-[0_8px_30px_rgba(0,0,0,0.25)]"
+                  className="absolute inset-0 rounded-[28px] overflow-hidden ring-1 backdrop-blur-md shadow-[0_10px_35px_rgba(0,0,0,0.35)]"
                   style={{
-                    background: "linear-gradient(180deg, rgba(255,255,255,0.14), rgba(255,255,255,0.06))",
+                    background: "linear-gradient(180deg, rgba(255,255,255,0.16), rgba(255,255,255,0.07))",
                     borderColor: "rgba(168,177,255,0.28)",
                   }}
                 >
                   {/* sheen + vignette */}
-                  <div
-                    className="pointer-events-none absolute inset-x-0 top-0 h-12"
-                    style={{
-                      background: "linear-gradient(180deg, rgba(255,255,255,0.55), transparent)",
-                      opacity: 0.18,
-                    }}
-                  />
-                  <div
-                    className="pointer-events-none absolute inset-0"
-                    style={{
-                      background:
-                        "radial-gradient(1000px 600px at 10% -20%, rgba(168,177,255,0.45), transparent 60%)",
-                      opacity: 0.10,
-                    }}
-                  />
+                  <div className="pointer-events-none absolute inset-x-0 top-0 h-16"
+                    style={{ background: "linear-gradient(180deg, rgba(255,255,255,0.55), transparent)", opacity: 0.18 }} />
+                  <div className="pointer-events-none absolute inset-0"
+                    style={{ background: "radial-gradient(1300px 800px at 10% -20%, rgba(168,177,255,0.45), transparent 60%)", opacity: 0.10 }} />
                 </div>
 
                 {/* Interaction layer (drag + click). We DO NOT rotate this layer. */}
@@ -283,50 +235,43 @@ function FlashcardDeck({
                   dragElastic={0.2}
                   onDragEnd={(_, info) => {
                     if (!isTop) return;
-                    if (info.offset.x > 120) { markCorrect(); return; }
-                    if (info.offset.x < -120) { markIncorrect(); return; }
+                    if (info.offset.x > 160) { markCorrect(); return; }
+                    if (info.offset.x < -160) { markIncorrect(); return; }
                   }}
-                  whileTap={{ scale: 0.98 }}
+                  whileTap={{ scale: 0.985 }}
                   onClick={() => isTop && setFlipped((f) => !f)}
                 />
 
                 {/* FRONT FACE */}
                 <motion.div
-                  className="absolute inset-0 grid place-items-center px-6"
+                  className="absolute inset-0 grid place-items-center px-10"
                   style={{
-                    transformOrigin: "center",
-                    backfaceVisibility: "hidden",
-                    WebkitBackfaceVisibility: "hidden",
-                    transformStyle: "preserve-3d",
-                    willChange: "transform",
+                    transformOrigin: "center", backfaceVisibility: "hidden", WebkitBackfaceVisibility: "hidden",
+                    transformStyle: "preserve-3d", willChange: "transform",
                   }}
                   animate={{ rotateY: flipped && isTop ? 180 : 0 }}
                   transition={{ duration: 0.35, ease: "easeInOut" }}
                 >
-                  <div className="text-[20px] sm:text-xl font-semibold leading-snug text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.35)]">
+                  <div className="absolute left-5 top-4 text-xs tracking-wide uppercase text-white/70">FRONT</div>
+                  <div className="text-2xl sm:text-3xl md:text-4xl font-semibold leading-snug text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.35)] text-center">
                     {terms[idx].front}
                   </div>
-                  {/* remove label if you don't want it */}
-                  <span className="absolute left-4 top-3 text-[11px] tracking-wide uppercase text-white/60">Front</span>
                 </motion.div>
 
                 {/* BACK FACE (counter-animated) */}
                 <motion.div
-                  className="absolute inset-0 grid place-items-center px-6"
+                  className="absolute inset-0 grid place-items-center px-10"
                   style={{
-                    transformOrigin: "center",
-                    backfaceVisibility: "hidden",
-                    WebkitBackfaceVisibility: "hidden",
-                    transformStyle: "preserve-3d",
-                    willChange: "transform",
+                    transformOrigin: "center", backfaceVisibility: "hidden", WebkitBackfaceVisibility: "hidden",
+                    transformStyle: "preserve-3d", willChange: "transform",
                   }}
                   animate={{ rotateY: flipped && isTop ? 0 : -180 }}
                   transition={{ duration: 0.35, ease: "easeInOut" }}
                 >
-                  <div className="text-[20px] sm:text-xl font-semibold leading-snug text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.35)]">
+                  <div className="absolute left-5 top-4 text-xs tracking-wide uppercase text-white/70">BACK</div>
+                  <div className="text-2xl sm:text-3xl md:text-4xl font-semibold leading-snug text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.35)] text-center">
                     {terms[idx].back}
                   </div>
-                  <span className="absolute left-4 top-3 text-[11px] tracking-wide uppercase text-white/60">Back</span>
                 </motion.div>
               </div>
 
@@ -334,10 +279,8 @@ function FlashcardDeck({
               <AnimatePresence>
                 {floatScore !== null && (
                   <motion.div
-                    className="pointer-events-none absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-8 text-white font-bold text-xl"
-                    initial={{ opacity: 0, y: 6 }}
-                    animate={{ opacity: 1, y: -12 }}
-                    exit={{ opacity: 0, y: -20 }}
+                    className="pointer-events-none absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-10 text-white font-bold text-2xl"
+                    initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: -14 }} exit={{ opacity: 0, y: -24 }}
                     transition={{ duration: 0.6 }}
                   >
                     {floatScore > 0 ? `+${floatScore}` : `${floatScore}`}
@@ -353,26 +296,29 @@ function FlashcardDeck({
       <AnimatePresence>
         {order.length > 0 && flipped && (
           <motion.div
-            className="absolute -bottom-14 left-1/2 -translate-x-1/2 flex items-center gap-2"
+            className="absolute -bottom-20 left-1/2 -translate-x-1/2 flex items-center gap-4"
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 6 }}
           >
+            {/* Wrong (icon-only, RED) */}
             <button
+              aria-label="Wrong"
               onClick={(e) => { e.stopPropagation(); markIncorrect(); }}
-              className="rounded-md px-3.5 py-2 text-sm font-medium text-white/90
-                         bg-white/8 hover:bg-white/12 active:scale-[0.98]
-                         ring-1 ring-white/20 backdrop-blur transition"
+              className="rounded-xl p-3 bg-[#ef4444] hover:bg-[#f05252] active:scale-[0.98]
+                        ring-1 ring-white/10 transition shadow-[0_6px_20px_rgba(239,68,68,0.35)]"
             >
-              ✖ Wrong
+              <SvgFileIcon src="/icons/wrong.svg" className="h-6 w-6" />
             </button>
+
+            {/* Correct (icon-only, GREEN) */}
             <button
+              aria-label="Correct"
               onClick={(e) => { e.stopPropagation(); markCorrect(); }}
-              className="rounded-md px-3.5 py-2 text-sm font-medium text-white
-                         bg-[#1f8b4c] hover:bg-[#229b55] active:scale-[0.98]
-                         ring-1 ring-white/10 transition shadow-[0_6px_20px_rgba(31,139,76,0.35)]"
+              className="rounded-xl p-3 bg-[#1f8b4c] hover:bg-[#229b55] active:scale-[0.98]
+                        ring-1 ring-white/10 transition shadow-[0_6px_20px_rgba(31,139,76,0.35)]"
             >
-              ✅ Correct
+              <SvgFileIcon src="/icons/correct.svg" className="h-6 w-6" />
             </button>
           </motion.div>
         )}
@@ -380,8 +326,6 @@ function FlashcardDeck({
     </div>
   );
 }
-
-
 
 /* ──────────────────────────────────────────────────────────────────────────
    Page
@@ -399,14 +343,11 @@ export default function FlashcardsPage() {
     try {
       const raw = typeof window !== "undefined" ? localStorage.getItem(storageKey) : null;
       return raw ? JSON.parse(raw) : null;
-    } catch {
-      return null;
-    }
+    } catch { return null; }
   }, [storageKey]);
 
   const difficulty: Difficulty = urlDiff || stored?.difficulty || "easy";
   const mute: boolean = urlMute === "1" ? true : urlMute === "0" ? false : Boolean(stored?.mute);
-
   const initialSeconds = DIFF_TO_SECONDS[difficulty] ?? 30;
 
   // Phases
@@ -429,15 +370,45 @@ export default function FlashcardsPage() {
   const urgency = Math.max(0, Math.min(1, timeLeft / initialSeconds || 0));
   const particleColor = urgencyColor(urgency);
 
+  // Responsive card size (~3x)
+  const cardSize = useCardSize();
+
+  /* ── BGM: play on game start (phase === "running"), respect mute ───────── */
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioTriedRef = useRef(false);
+  useEffect(() => {
+    audioRef.current = typeof Audio !== "undefined" ? new Audio("/music/flashcards-bgm.mp3") : null;
+    if (audioRef.current) { audioRef.current.loop = true; audioRef.current.volume = 0.35; }
+    return () => { if (audioRef.current) { audioRef.current.pause(); audioRef.current.currentTime = 0; } };
+  }, []);
+  const tryPlay = useCallback(() => {
+    if (!audioRef.current || mute) return;
+    const a = audioRef.current;
+    a.play().catch(() => {
+      if (audioTriedRef.current) return;
+      audioTriedRef.current = true;
+      const onGesture = () => {
+        a.play().finally(() => {
+          window.removeEventListener("pointerdown", onGesture);
+          window.removeEventListener("keydown", onGesture);
+        });
+      };
+      window.addEventListener("pointerdown", onGesture, { once: true });
+      window.addEventListener("keydown", onGesture, { once: true });
+    });
+  }, [mute]);
+  useEffect(() => {
+    if (!audioRef.current) return;
+    if (phase === "running" && !mute) { tryPlay(); }
+    else { audioRef.current.pause(); audioRef.current.currentTime = 0; }
+  }, [phase, mute, tryPlay]);
+
   // Welcome (5s) → countdown
   useEffect(() => {
     if (phase !== "introText") return;
     const showTimer = setTimeout(() => {
       setTextFadingOut(true);
-      const fadeTimer = setTimeout(() => {
-        setPhase("countdown");
-        setTextFadingOut(false);
-      }, 550);
+      const fadeTimer = setTimeout(() => { setPhase("countdown"); setTextFadingOut(false); }, 550);
       return () => clearTimeout(fadeTimer);
     }, 5000);
     return () => clearTimeout(showTimer);
@@ -453,33 +424,40 @@ export default function FlashcardsPage() {
         if (prev > 1) return prev - 1;
         if (t) clearInterval(t);
         setCounterFadingOut(true);
-        setTimeout(() => {
-          setCounterFadingOut(false);
-          setPhase("running");
-        }, 550);
+        setTimeout(() => { setCounterFadingOut(false); setPhase("running"); }, 550);
         return prev;
       });
     }, 1000);
     return () => t && clearInterval(t);
   }, [phase]);
 
-  // Timer tick
+  // Timer tick (per-card). On timeout, auto-mark wrong via deck API.
+  const timeoutFiredRef = useRef(false);
   useEffect(() => {
     if (phase !== "running") return;
-    setTimeLeft(initialSeconds);
+    setTimeLeft(initialSeconds); // when entering running, start fresh
+    timeoutFiredRef.current = false;
     let t: ReturnType<typeof setInterval> | null = null;
     t = setInterval(() => {
       if (Date.now() < frozenUntil) return;
       setTimeLeft((s) => {
-        if (s > 0) return s - 1;
-        setLives((l) => Math.max(0, l - 1));
-        setStreak(0);
-        setCleared((c) => c + 1);
+        if (s > 1) return s - 1;
+        if (!timeoutFiredRef.current) {
+          timeoutFiredRef.current = true;
+          (window as any).__qc?.wrong?.(); // advance with "Wrong"
+        }
         return 0;
       });
     }, 1000);
     return () => t && clearInterval(t);
   }, [phase, initialSeconds, frozenUntil]);
+
+  // Reset timer whenever the deck advances (correct/wrong) — uses onDeckProgress
+  useEffect(() => {
+    if (phase !== "running") return;
+    setTimeLeft(initialSeconds);
+    timeoutFiredRef.current = false;
+  }, [cleared, initialSeconds, phase]);
 
   // End states
   useEffect(() => {
@@ -502,45 +480,23 @@ export default function FlashcardsPage() {
   }, [phase]);
 
   // Handlers passed to deck
-  const handleScore = useCallback(
-    (points: number, newStreak: number) => {
-      const now = Date.now();
-      const mul = now < doubleUntil ? 2 : 1;
-      setScore((s) => s + points * mul);
-      setStreak(newStreak);
-    },
-    [doubleUntil]
-  );
-
-  const handleLifeLost = useCallback(() => {
-    setLives((l) => Math.max(0, l - 1));
-    setStreak(0);
-  }, []);
-
-  const handleDeckProgress = useCallback((nCleared: number) => {
-    setCleared(nCleared);
-  }, []);
+  const handleScore = useCallback((points: number, newStreak: number) => {
+    const now = Date.now(); const mul = now < doubleUntil ? 2 : 1;
+    setScore((s) => s + points * mul); setStreak(newStreak);
+  }, [doubleUntil]);
+  const handleLifeLost = useCallback(() => { setLives((l) => Math.max(0, l - 1)); setStreak(0); }, []);
+  const handleDeckProgress = useCallback((nCleared: number) => { setCleared(nCleared); }, []);
 
   const [burstKey, setBurstKey] = useState(0);
   const [burstKind, setBurstKind] = useState<"good" | "bad">("good");
-  const triggerBurst = useCallback((kind: "good" | "bad") => {
-    setBurstKind(kind);
-    setBurstKey((k) => k + 1);
-  }, []);
+  const triggerBurst = useCallback((kind: "good" | "bad") => { setBurstKind(kind); setBurstKey((k) => k + 1); }, []);
 
   const [toast, setToast] = useState<string | null>(null);
   const triggerPowerUp = useCallback((kind: "time" | "double" | "freeze") => {
     const now = Date.now();
-    if (kind === "time") {
-      setTimeLeft((s) => s + 5);
-      setToast("+5s Time Boost");
-    } else if (kind === "freeze") {
-      setFrozenUntil(now + 3000);
-      setToast("⏸ Timer Frozen (3s)");
-    } else if (kind === "double") {
-      setDoubleUntil(now + 8000);
-      setToast("✖2 Double Points (8s)");
-    }
+    if (kind === "time") { setTimeLeft((s) => s + 5); setToast("+5s Time Boost"); }
+    else if (kind === "freeze") { setFrozenUntil(now + 3000); setToast("⏸ Timer Frozen (3s)"); }
+    else if (kind === "double") { setDoubleUntil(now + 8000); setToast("✖2 Double Points (8s)"); }
     setTimeout(() => setToast(null), 1800);
   }, []);
 
@@ -550,25 +506,16 @@ export default function FlashcardsPage() {
       <div className="absolute inset-0" style={{ position: "absolute", width: "100%", height: "100%" }}>
         <Particles
           particleColors={[particleColor, "#ffffff"]}
-          particleCount={200}
-          particleSpread={10}
-          speed={0.02}
-          particleBaseSize={100}
-          moveParticlesOnHover={true}
-          alphaParticles={false}
-          disableRotation={false}
+          particleCount={200} particleSpread={10} speed={0.02}
+          particleBaseSize={100} moveParticlesOnHover alphaParticles={false} disableRotation={false}
         />
       </div>
 
       {/* Tiny radial burst when scoring/miss */}
       <AnimatePresence key={burstKey}>
         <motion.div
-          key={`burst-${burstKey}`}
-          className="pointer-events-none absolute inset-0"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 0.6 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.25 }}
+          key={`burst-${burstKey}`} className="pointer-events-none absolute inset-0"
+          initial={{ opacity: 0 }} animate={{ opacity: 0.6 }} exit={{ opacity: 0 }} transition={{ duration: 0.25 }}
           style={{
             background:
               burstKind === "good"
@@ -585,18 +532,14 @@ export default function FlashcardsPage() {
           <div className="absolute inset-0 grid place-items-center p-4 backdrop-blur-sm bg-black/30">
             <div className={["transition-opacity duration-500", textFadingOut ? "opacity-0" : "opacity-100"].join(" ")}>
               <BlurText
-                text="Welcome to Flashcards"
-                delay={200}
-                animateBy="words"
-                direction="top"
-                onAnimationComplete={() => {}}
-                className="text-white text-3xl sm:text-4xl md:text-5xl font-extrabold mb-6 text-center"
+                text="Welcome to Flashcards" delay={200} animateBy="words" direction="top"
+                onAnimationComplete={() => {}} className="text-white text-3xl sm:text-4xl md:text-5xl font-extrabold mb-6 text-center"
               />
             </div>
           </div>
         )}
 
-        {/* Step 2: 3-2-1 (our animated counter) */}
+        {/* Step 2: 3-2-1 */}
         {phase === "countdown" && (
           <div className="absolute inset-0 grid place-items-center p-4 backdrop-blur-sm bg-black/20">
             <div className={["transition-opacity duration-500", counterFadingOut ? "opacity-0" : "opacity-100"].join(" ")}>
@@ -608,51 +551,18 @@ export default function FlashcardsPage() {
         {/* HUD (running) */}
         {phase === "running" && (
           <>
-            {/* Top HUD: premium progress bar */}
-            <div className="absolute top-3 left-4 right-4">
+            {/* Topmost progress bar */}
+            <div className="absolute top-0 left-4 right-4">
               <div className="h-2.5 rounded-full bg-white/10 overflow-hidden ring-1 ring-white/10 backdrop-blur">
                 <div
                   className="h-full transition-[width] duration-300"
-                  style={{
-                    width: `${(cleared / total) * 100}%`,
-                    background: "linear-gradient(90deg, rgba(168,177,255,0.85), rgba(255,255,255,0.9))",
-                  }}
+                  style={{ width: `${(cleared / total) * 100}%`, background: "linear-gradient(90deg, rgba(168,177,255,0.85), rgba(255,255,255,0.9))" }}
                 />
               </div>
             </div>
 
-            {/* Streak glow line when hot */}
-            <AnimatePresence>
-              {streak >= 5 && (
-                <motion.div
-                  key="streak-glow"
-                  className="pointer-events-none absolute top-0 left-0 right-0 h-1"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  style={{
-                    background:
-                      "linear-gradient(90deg, transparent, #a8b1ff, white, #a8b1ff, transparent)",
-                  }}
-                />
-              )}
-            </AnimatePresence>
-
-            {/* Timer (top-right) — no circle */}
-            <div className="absolute top-4 right-4">
-              <AnimatedCounter
-                value={timeLeft}
-                places={2}
-                fontSize={32}
-                padding={0}
-                gap={4}
-                textColor="white"
-                fontWeight={900}
-              />
-            </div>
-
-            {/* Score (top-left) & Lives — unified glass chips */}
-            <div className="absolute top-4 left-4 flex items-center gap-3 text-white">
+            {/* Push HUD row down so it never overlaps the progress bar */}
+            <div className="absolute top-10 left-4 flex items-center gap-3 text-white">
               <div className="rounded-md px-2.5 py-1.5 text-sm bg-white/8 ring-1 ring-white/15 backdrop-blur">
                 Score: <span className="font-bold">{score}</span>
               </div>
@@ -666,14 +576,28 @@ export default function FlashcardsPage() {
               </div>
             </div>
 
+            {/* Timer (top-right) */}
+            <div className="absolute top-10 right-4">
+              <AnimatedCounter value={timeLeft} places={2} fontSize={32} padding={0} gap={4} textColor="white" fontWeight={900} />
+            </div>
+
+            {/* Streak glow line when hot */}
+            <AnimatePresence>
+              {streak >= 5 && (
+                <motion.div
+                  key="streak-glow" className="pointer-events-none absolute top-[6px] left-0 right-0 h-1"
+                  initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                  style={{ background: "linear-gradient(90deg, transparent, #a8b1ff, white, #a8b1ff, transparent)" }}
+                />
+              )}
+            </AnimatePresence>
+
             {/* Power-up toast */}
             <AnimatePresence>
               {toast && (
                 <motion.div
-                  className="absolute top-16 left-1/2 -translate-x-1/2 rounded-md px-3 py-1.5 text-sm text-white bg-white/10 ring-1 ring-white/20"
-                  initial={{ opacity: 0, y: -6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -6 }}
+                  className="absolute top-20 left-1/2 -translate-x-1/2 rounded-md px-3 py-1.5 text-sm text-white bg-white/10 ring-1 ring-white/20"
+                  initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }}
                 >
                   {toast}
                 </motion.div>
@@ -690,7 +614,7 @@ export default function FlashcardsPage() {
                 onDeckProgress={(n) => handleDeckProgress(n)}
                 onBurst={(k) => triggerBurst(k)}
                 onPowerUp={(k) => triggerPowerUp(k)}
-                size={{ width: 460, height: 280 }}
+                size={cardSize}
               />
             </div>
           </>
@@ -702,36 +626,14 @@ export default function FlashcardsPage() {
             <div className="w-[min(560px,92vw)] rounded-2xl bg-[#18062e] ring-1 ring-white/15 p-6 text-white">
               <div className="text-xl font-semibold">Session Summary</div>
               <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
-                <div className="rounded-md bg-white/5 ring-1 ring-white/10 p-3">
-                  <div className="text-white/70">Difficulty</div>
-                  <div className="text-white font-medium capitalize">{difficulty}</div>
-                </div>
-                <div className="rounded-md bg-white/5 ring-1 ring-white/10 p-3">
-                  <div className="text-white/70">Score</div>
-                  <div className="text-white font-medium">{score}</div>
-                </div>
-                <div className="rounded-md bg-white/5 ring-1 ring-white/10 p-3">
-                  <div className="text-white/70">Cleared</div>
-                  <div className="text-white font-medium">{Math.min(cleared, total)} / {total}</div>
-                </div>
-                <div className="rounded-md bg-white/5 ring-1 ring-white/10 p-3">
-                  <div className="text-white/70">Max Streak</div>
-                  <div className="text-white font-medium">{streak}</div>
-                </div>
+                <div className="rounded-md bg-white/5 ring-1 ring-white/10 p-3"><div className="text-white/70">Difficulty</div><div className="text-white font-medium capitalize">{difficulty}</div></div>
+                <div className="rounded-md bg-white/5 ring-1 ring-white/10 p-3"><div className="text-white/70">Score</div><div className="text-white font-medium">{score}</div></div>
+                <div className="rounded-md bg-white/5 ring-1 ring-white/10 p-3"><div className="text-white/70">Cleared</div><div className="text-white font-medium">{Math.min(cleared, total)} / {total}</div></div>
+                <div className="rounded-md bg-white/5 ring-1 ring-white/10 p-3"><div className="text-white/70">Max Streak</div><div className="text-white font-medium">{streak}</div></div>
               </div>
               <div className="mt-5 flex items-center justify-end gap-2">
-                <a
-                  href={`/sets/${setId}/flashcards?difficulty=${difficulty}&mute=${mute ? "1" : "0"}`}
-                  className="rounded-md px-3 py-1.5 text-sm text-white/90 bg-[#532e95] hover:bg-[#5f3aa6] ring-1 ring-white/20"
-                >
-                  Play again
-                </a>
-                <a
-                  href={`/sets/${setId}`}
-                  className="rounded-md px-3 py-1.5 text-sm text-white/90 ring-1 ring-white/20 hover:bg-white/10"
-                >
-                  Back to set
-                </a>
+                <a href={`/sets/${setId}/flashcards?difficulty=${difficulty}&mute=${mute ? "1" : "0"}`} className="rounded-md px-3 py-1.5 text-sm text-white/90 bg-[#532e95] hover:bg-[#5f3aa6] ring-1 ring-white/20">Play again</a>
+                <a href={`/sets/${setId}`} className="rounded-md px-3 py-1.5 text-sm text-white/90 ring-1 ring-white/20 hover:bg-white/10">Back to set</a>
               </div>
             </div>
           </div>
