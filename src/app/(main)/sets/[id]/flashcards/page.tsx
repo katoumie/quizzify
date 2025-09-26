@@ -17,7 +17,7 @@ const STORAGE_PREFIX = "qz_flashcards_prefs_";
 
 type Term = { id: string; front: string; back: string };
 
-// Demo data — replace with real set terms later
+// Demo fallback
 const DEMO_TERMS: Term[] = [
   { id: "1", front: "Mitochondria — function?", back: "Powerhouse of the cell (ATP generation)" },
   { id: "2", front: "Photosynthesis formula", back: "6CO₂ + 6H₂O → C₆H₁₂O₆ + 6O₂" },
@@ -35,13 +35,7 @@ function padNumber(value: number, places: number) {
   return "0".repeat(places - s.length) + s;
 }
 function AnimatedCounter({
-  value,
-  places = 2,
-  fontSize = 48,
-  gap = 6,
-  textColor = "white",
-  fontWeight = 900,
-  padding = 0,
+  value, places = 2, fontSize = 48, gap = 6, textColor = "white", fontWeight = 900, padding = 0,
 }: {
   value: number; places?: number; fontSize?: number; gap?: number; textColor?: string; fontWeight?: number; padding?: number;
 }) {
@@ -92,32 +86,31 @@ function urgencyColor(t: number) {
 ────────────────────────────────────────────────────────────────────────── */
 function useCardSize() {
   const BASE_W = 460, BASE_H = 280, TARGET_SCALE = 3;
-  const ASPECT = BASE_H / BASE_W; // ~0.6087
+  const ASPECT = BASE_H / BASE_W;
   const [size, setSize] = useState<{ width: number; height: number }>({ width: BASE_W * TARGET_SCALE, height: BASE_H * TARGET_SCALE });
-
   useEffect(() => {
     function recalc() {
       const vw = window.innerWidth, vh = window.innerHeight;
-      const padX = 64;           // side padding
-      const padY = 260;          // leave space for HUD/actions
+      const padX = 64;   // side padding
+      const padY = 260;  // room for HUD/actions
       const maxW = Math.min(BASE_W * TARGET_SCALE, vw - padX);
       const maxH = Math.min(BASE_H * TARGET_SCALE, vh - padY);
       const width = Math.min(maxW, Math.floor(maxH / ASPECT));
       const height = Math.floor(width * ASPECT);
       setSize({ width: Math.max(320, width), height: Math.max(200, height) });
     }
-    recalc();
-    window.addEventListener("resize", recalc);
+    recalc(); window.addEventListener("resize", recalc);
     return () => window.removeEventListener("resize", recalc);
   }, []);
   return size;
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   FlashcardDeck — faces rotate independently (no mirror bug) + glass look
+   FlashcardDeck — faces rotate independently (no mirror) + glass look
+   onSfx("correct" | "wrong", { byTimeout?: boolean })
 ────────────────────────────────────────────────────────────────────────── */
 function FlashcardDeck({
-  terms, difficulty, onScore, onLifeLost, onDeckProgress, onBurst, onPowerUp, size,
+  terms, difficulty, onScore, onLifeLost, onDeckProgress, onBurst, onPowerUp, onSfx, size,
 }: {
   terms: Term[]; difficulty: Difficulty;
   onScore: (pointsGained: number, newStreak: number) => void;
@@ -125,6 +118,7 @@ function FlashcardDeck({
   onDeckProgress: (cleared: number, total: number) => void;
   onBurst: (kind: "good" | "bad") => void;
   onPowerUp: (kind: "time" | "double" | "freeze") => void;
+  onSfx: (kind: "correct" | "wrong", opts?: { byTimeout?: boolean }) => void;
   size: { width: number; height: number };
 }) {
   const [order, setOrder] = useState<number[]>(() => terms.map((_, i) => i));
@@ -136,8 +130,7 @@ function FlashcardDeck({
 
   useEffect(() => {
     setOrder(terms.map((_, i) => i));
-    setFlipped(false); setAnimState("idle");
-    setCleared(0); setStreak(0);
+    setFlipped(false); setAnimState("idle"); setCleared(0); setStreak(0);
   }, [terms]);
 
   const total = terms.length;
@@ -152,12 +145,15 @@ function FlashcardDeck({
       if (prev.length <= 1) return prev;
       const [first, ...rest] = prev; return [...rest, first];
     });
-    setFlipped(false); setAnimState("idle");
+    // ensure next card mounts unflipped (no entrance flip)
+    setFlipped(false);
+    setAnimState("idle");
   }, []);
 
   const markCorrect = useCallback(() => {
     if (!top) return;
     setAnimState("right");
+    onSfx("correct", { byTimeout: false });
     const points = Math.round(base * comboMultiplier);
     setTimeout(() => { setFloatScore(+points); setTimeout(() => setFloatScore(null), 700); }, 100);
     const newStreak = streak + 1; setStreak(newStreak); onScore(points, newStreak);
@@ -166,19 +162,25 @@ function FlashcardDeck({
     const roll = Math.random();
     if (roll < 0.06) onPowerUp("time"); else if (roll < 0.12) onPowerUp("freeze"); else if (roll < 0.18) onPowerUp("double");
     setTimeout(nextCard, 340);
-  }, [top, base, comboMultiplier, streak, onScore, onDeckProgress, onBurst, onPowerUp, total, nextCard]);
+  }, [top, base, comboMultiplier, streak, onScore, onDeckProgress, onBurst, onPowerUp, nextCard, total, onSfx]);
 
-  const markIncorrect = useCallback(() => {
+  const markIncorrect = useCallback((byTimeout: boolean = false) => {
     if (!top) return;
-    setAnimState("left"); setStreak(0); onLifeLost();
+    setAnimState("left");
+    onSfx("wrong", { byTimeout });
+    setStreak(0); onLifeLost();
     setCleared((c) => { const n = c + 1; onDeckProgress(n, total); return n; });
     onBurst("bad");
     setTimeout(nextCard, 340);
-  }, [top, onLifeLost, onDeckProgress, total, nextCard]);
+  }, [top, onLifeLost, onDeckProgress, total, nextCard, onSfx, onBurst]);
 
-  // expose keyboard helpers
+  // expose keyboard helpers (wrong can mark as timeout or not)
   useEffect(() => {
-    (window as any).__qc = { correct: () => markCorrect(), wrong: () => markIncorrect(), flip: () => setFlipped((f: boolean) => !f) };
+    (window as any).__qc = {
+      correct: () => markCorrect(),
+      wrong: (byTimeout?: boolean) => markIncorrect(Boolean(byTimeout)),
+      flip: () => setFlipped((f: boolean) => !f),
+    };
   }, [markCorrect, markIncorrect]);
 
   const visible = order.slice(0, Math.min(3, order.length));
@@ -212,7 +214,7 @@ function FlashcardDeck({
             >
               {/* Perspective context */}
               <div className="relative w-full h-full select-none" style={{ perspective: 1000 }}>
-                {/* Glass surface (static, clips overlays) */}
+                {/* Glass surface (static) */}
                 <div
                   className="absolute inset-0 rounded-[28px] overflow-hidden ring-1 backdrop-blur-md shadow-[0_10px_35px_rgba(0,0,0,0.35)]"
                   style={{
@@ -220,11 +222,15 @@ function FlashcardDeck({
                     borderColor: "rgba(168,177,255,0.28)",
                   }}
                 >
-                  {/* sheen + vignette */}
                   <div className="pointer-events-none absolute inset-x-0 top-0 h-16"
                     style={{ background: "linear-gradient(180deg, rgba(255,255,255,0.55), transparent)", opacity: 0.18 }} />
                   <div className="pointer-events-none absolute inset-0"
                     style={{ background: "radial-gradient(1300px 800px at 10% -20%, rgba(168,177,255,0.45), transparent 60%)", opacity: 0.10 }} />
+                </div>
+
+                {/* STATIC overlay label (no fly-in/out) */}
+                <div className="absolute left-5 top-4 text-xs tracking-wide uppercase text-white/70 pointer-events-none select-none">
+                  {isTop && flipped ? "DEFINITION" : "TERM"}
                 </div>
 
                 {/* Interaction layer (drag + click). We DO NOT rotate this layer. */}
@@ -236,14 +242,15 @@ function FlashcardDeck({
                   onDragEnd={(_, info) => {
                     if (!isTop) return;
                     if (info.offset.x > 160) { markCorrect(); return; }
-                    if (info.offset.x < -160) { markIncorrect(); return; }
+                    if (info.offset.x < -160) { markIncorrect(false); return; }
                   }}
                   whileTap={{ scale: 0.985 }}
-                  onClick={() => isTop && setFlipped((f) => !f)}
+                  onClick={() => isTop && (window as any).__qc?.flip?.()}
                 />
 
-                {/* FRONT FACE */}
+                {/* FRONT FACE (no mount animation) */}
                 <motion.div
+                  initial={false}
                   className="absolute inset-0 grid place-items-center px-10"
                   style={{
                     transformOrigin: "center", backfaceVisibility: "hidden", WebkitBackfaceVisibility: "hidden",
@@ -252,14 +259,14 @@ function FlashcardDeck({
                   animate={{ rotateY: flipped && isTop ? 180 : 0 }}
                   transition={{ duration: 0.35, ease: "easeInOut" }}
                 >
-                  <div className="absolute left-5 top-4 text-xs tracking-wide uppercase text-white/70">FRONT</div>
                   <div className="text-2xl sm:text-3xl md:text-4xl font-semibold leading-snug text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.35)] text-center">
                     {terms[idx].front}
                   </div>
                 </motion.div>
 
-                {/* BACK FACE (counter-animated) */}
+                {/* BACK FACE (no mount animation, counter-animated) */}
                 <motion.div
+                  initial={false}
                   className="absolute inset-0 grid place-items-center px-10"
                   style={{
                     transformOrigin: "center", backfaceVisibility: "hidden", WebkitBackfaceVisibility: "hidden",
@@ -268,19 +275,20 @@ function FlashcardDeck({
                   animate={{ rotateY: flipped && isTop ? 0 : -180 }}
                   transition={{ duration: 0.35, ease: "easeInOut" }}
                 >
-                  <div className="absolute left-5 top-4 text-xs tracking-wide uppercase text-white/70">BACK</div>
                   <div className="text-2xl sm:text-3xl md:text-4xl font-semibold leading-snug text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.35)] text-center">
                     {terms[idx].back}
                   </div>
                 </motion.div>
               </div>
 
-              {/* Floating score popup */}
+              {/* Points popup — ABOVE the card and a bit bigger */}
               <AnimatePresence>
                 {floatScore !== null && (
                   <motion.div
-                    className="pointer-events-none absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-10 text-white font-bold text-2xl"
-                    initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: -14 }} exit={{ opacity: 0, y: -24 }}
+                    className="pointer-events-none absolute left-1/2 top-0 -translate-x-1/2 -translate-y-[110%] text-white font-extrabold text-3xl"
+                    initial={{ opacity: 0, y: 8, scale: 0.9 }}
+                    animate={{ opacity: 1, y: -2, scale: 1.06 }}
+                    exit={{ opacity: 0, y: -16, scale: 0.98 }}
                     transition={{ duration: 0.6 }}
                   >
                     {floatScore > 0 ? `+${floatScore}` : `${floatScore}`}
@@ -294,31 +302,31 @@ function FlashcardDeck({
 
       {/* Actions: only when the top card is flipped */}
       <AnimatePresence>
-        {order.length > 0 && flipped && (
+        {order.length > 0 && visible[0] !== undefined && flipped && (
           <motion.div
             className="absolute -bottom-20 left-1/2 -translate-x-1/2 flex items-center gap-4"
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 6 }}
+            initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 6 }}
           >
-            {/* Wrong (icon-only, RED) */}
+            {/* Wrong (icon-only, translucent RED) */}
             <button
               aria-label="Wrong"
-              onClick={(e) => { e.stopPropagation(); markIncorrect(); }}
-              className="rounded-xl p-3 bg-[#ef4444] hover:bg-[#f05252] active:scale-[0.98]
-                        ring-1 ring-white/10 transition shadow-[0_6px_20px_rgba(239,68,68,0.35)]"
+              onClick={(e) => { e.stopPropagation(); markIncorrect(false); }}
+              className="rounded-xl p-3 bg-[rgba(239,68,68,0.22)] hover:bg-[rgba(239,68,68,0.32)] active:scale-[0.98]
+                        ring-1 ring-white/20 backdrop-blur-md transition-colors
+                        shadow-[0_6px_20px_rgba(239,68,68,0.25)]"
             >
-              <SvgFileIcon src="/icons/wrong.svg" className="h-6 w-6" />
+              <SvgFileIcon src="/icons/wrong.svg" className="h-6 w-6 opacity-90" />
             </button>
 
-            {/* Correct (icon-only, GREEN) */}
+            {/* Correct (icon-only, translucent GREEN) */}
             <button
               aria-label="Correct"
               onClick={(e) => { e.stopPropagation(); markCorrect(); }}
-              className="rounded-xl p-3 bg-[#1f8b4c] hover:bg-[#229b55] active:scale-[0.98]
-                        ring-1 ring-white/10 transition shadow-[0_6px_20px_rgba(31,139,76,0.35)]"
+              className="rounded-xl p-3 bg-[rgba(31,139,76,0.22)] hover:bg-[rgba(31,139,76,0.32)] active:scale-[0.98]
+                        ring-1 ring-white/20 backdrop-blur-md transition-colors
+                        shadow-[0_6px_20px_rgba(31,139,76,0.25)]"
             >
-              <SvgFileIcon src="/icons/correct.svg" className="h-6 w-6" />
+              <SvgFileIcon src="/icons/correct.svg" className="h-6 w-6 opacity-90" />
             </button>
           </motion.div>
         )}
@@ -356,6 +364,40 @@ export default function FlashcardsPage() {
   const [counterFadingOut, setCounterFadingOut] = useState(false);
   const [introCount, setIntroCount] = useState<number>(3);
 
+  // Data (REAL set data with fallback)
+  const [terms, setTerms] = useState<Term[]>(DEMO_TERMS);
+  const [loadingTerms, setLoadingTerms] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoadingTerms(true);
+      try {
+        const res = await fetch(`/api/sets/${setId}`, { cache: "no-store" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+
+        const mapped: Term[] = Array.isArray(data?.cards)
+          ? (data.cards as any[]).map((c) => ({
+              id: String(c?.id ?? crypto.randomUUID()),
+              front: String(c?.term ?? ""),
+              back: String(c?.definition ?? ""),
+            }))
+          : [];
+
+        if (!cancelled) {
+          setTerms(mapped.length ? mapped : DEMO_TERMS);
+        }
+      } catch {
+        if (!cancelled) setTerms(DEMO_TERMS);
+      } finally {
+        if (!cancelled) setLoadingTerms(false);
+      }
+    }
+    load();
+    return () => { cancelled = true; };
+  }, [setId]);
+
   // Game state
   const [timeLeft, setTimeLeft] = useState<number>(initialSeconds);
   const [score, setScore] = useState(0);
@@ -364,31 +406,46 @@ export default function FlashcardsPage() {
   const [cleared, setCleared] = useState(0);
   const [frozenUntil, setFrozenUntil] = useState<number>(0);
   const [doubleUntil, setDoubleUntil] = useState<number>(0);
-  const total = DEMO_TERMS.length;
+  const total = terms.length;
 
   // Dynamic particles color by urgency
   const urgency = Math.max(0, Math.min(1, timeLeft / initialSeconds || 0));
   const particleColor = urgencyColor(urgency);
 
-  // Responsive card size (~3x)
+  // Responsive card size
   const cardSize = useCardSize();
 
-  /* ── BGM: play on game start (phase === "running"), respect mute ───────── */
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const audioTriedRef = useRef(false);
+  /* ── Audio: BGM + SFX ─────────────────────────────────────────────────── */
+  const bgmRef = useRef<HTMLAudioElement | null>(null);
+  const triedAutoplayRef = useRef(false);
+  const sfx = useRef<{ correct?: HTMLAudioElement; wrong?: HTMLAudioElement; timer?: HTMLAudioElement }>({});
   useEffect(() => {
-    audioRef.current = typeof Audio !== "undefined" ? new Audio("/music/flashcards-bgm.mp3") : null;
-    if (audioRef.current) { audioRef.current.loop = true; audioRef.current.volume = 0.35; }
-    return () => { if (audioRef.current) { audioRef.current.pause(); audioRef.current.currentTime = 0; } };
+    // background music
+    bgmRef.current = typeof Audio !== "undefined" ? new Audio("/music/flashcards-bgm.mp3") : null;
+    if (bgmRef.current) {
+      bgmRef.current.loop = true;
+      bgmRef.current.volume = 0.35;
+    }
+    // sfx
+    if (typeof Audio !== "undefined") {
+      sfx.current.correct = new Audio("/music/correct.mp3");
+      sfx.current.wrong = new Audio("/music/wrong.mp3");
+      sfx.current.timer = new Audio("/music/timer.mp3");
+      if (sfx.current.correct) sfx.current.correct.volume = 0.55;
+      if (sfx.current.wrong) sfx.current.wrong.volume = 0.55;
+      if (sfx.current.timer) sfx.current.timer.volume = 0.75;
+    }
+    return () => {
+      if (bgmRef.current) { bgmRef.current.pause(); bgmRef.current.currentTime = 0; }
+    };
   }, []);
-  const tryPlay = useCallback(() => {
-    if (!audioRef.current || mute) return;
-    const a = audioRef.current;
-    a.play().catch(() => {
-      if (audioTriedRef.current) return;
-      audioTriedRef.current = true;
+  const playBgmIfAllowed = useCallback(() => {
+    if (!bgmRef.current || mute) return;
+    bgmRef.current.play().catch(() => {
+      if (triedAutoplayRef.current) return;
+      triedAutoplayRef.current = true;
       const onGesture = () => {
-        a.play().finally(() => {
+        bgmRef.current?.play().finally(() => {
           window.removeEventListener("pointerdown", onGesture);
           window.removeEventListener("keydown", onGesture);
         });
@@ -397,11 +454,34 @@ export default function FlashcardsPage() {
       window.addEventListener("keydown", onGesture, { once: true });
     });
   }, [mute]);
+  const playSfx = useCallback((kind: "correct" | "wrong" | "timer") => {
+    if (mute) return;
+    const el = sfx.current[kind];
+    if (!el) return;
+    try { el.currentTime = 0; void el.play(); } catch {}
+  }, [mute]);
+
+  // Stop (and rewind) a specific sfx
+  const stopSfx = useCallback((kind: "correct" | "wrong" | "timer") => {
+    const el = sfx.current[kind];
+    if (!el) return;
+    try {
+      el.pause();
+      el.currentTime = 0;
+    } catch {}
+  }, []);
+
+  // Start/stop bgm with phase (also stop timer beep when leaving running)
   useEffect(() => {
-    if (!audioRef.current) return;
-    if (phase === "running" && !mute) { tryPlay(); }
-    else { audioRef.current.pause(); audioRef.current.currentTime = 0; }
-  }, [phase, mute, tryPlay]);
+    if (!bgmRef.current) return;
+    if (phase === "running" && !mute) {
+      playBgmIfAllowed();
+    } else {
+      bgmRef.current.pause();
+      bgmRef.current.currentTime = 0;
+      stopSfx("timer"); // ensure timer beep halts when leaving the game
+    }
+  }, [phase, mute, playBgmIfAllowed, stopSfx]);
 
   // Welcome (5s) → countdown
   useEffect(() => {
@@ -431,32 +511,48 @@ export default function FlashcardsPage() {
     return () => t && clearInterval(t);
   }, [phase]);
 
-  // Timer tick (per-card). On timeout, auto-mark wrong via deck API.
+  // Per-card timer
   const timeoutFiredRef = useRef(false);
-  useEffect(() => {
-    if (phase !== "running") return;
-    setTimeLeft(initialSeconds); // when entering running, start fresh
-    timeoutFiredRef.current = false;
-    let t: ReturnType<typeof setInterval> | null = null;
-    t = setInterval(() => {
-      if (Date.now() < frozenUntil) return;
-      setTimeLeft((s) => {
-        if (s > 1) return s - 1;
-        if (!timeoutFiredRef.current) {
-          timeoutFiredRef.current = true;
-          (window as any).__qc?.wrong?.(); // advance with "Wrong"
-        }
-        return 0;
-      });
-    }, 1000);
-    return () => t && clearInterval(t);
-  }, [phase, initialSeconds, frozenUntil]);
-
-  // Reset timer whenever the deck advances (correct/wrong) — uses onDeckProgress
+  const warnPlayedRef = useRef(false);
   useEffect(() => {
     if (phase !== "running") return;
     setTimeLeft(initialSeconds);
     timeoutFiredRef.current = false;
+    warnPlayedRef.current = false;
+
+    let t: ReturnType<typeof setInterval> | null = null;
+    t = setInterval(() => {
+      if (Date.now() < frozenUntil) return;
+      setTimeLeft((s) => {
+        const next = s > 0 ? s - 1 : 0;
+        if (next === 5 && !warnPlayedRef.current) {
+          warnPlayedRef.current = true;
+          playSfx("timer"); // play once per card
+        }
+        if (next > 0) return next;
+        // timeout → mark wrong once (flag as byTimeout = true)
+        if (!timeoutFiredRef.current) {
+          timeoutFiredRef.current = true;
+          (window as any).__qc?.wrong?.(true);
+        }
+        return 0;
+      });
+    }, 1000);
+
+    // cleanup: stop interval + kill any timer beep when the whole timer effect unmounts
+    return () => {
+      if (t) clearInterval(t);
+      stopSfx("timer");
+    };
+  }, [phase, initialSeconds, frozenUntil, playSfx, stopSfx]);
+
+  // Reset timer on deck progress (new card). We DO NOT forcibly stop timer.mp3 here,
+  // so a timeout-triggered beep can finish naturally.
+  useEffect(() => {
+    if (phase !== "running") return;
+    setTimeLeft(initialSeconds);
+    timeoutFiredRef.current = false;
+    warnPlayedRef.current = false;
   }, [cleared, initialSeconds, phase]);
 
   // End states
@@ -467,29 +563,36 @@ export default function FlashcardsPage() {
     }
   }, [phase, lives, cleared, total]);
 
-  // Keyboard shortcuts: Left = wrong, Right = correct, F = flip
+  // Keyboard shortcuts: Left = wrong, Right = correct, Space = flip
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (phase !== "running") return;
       if (e.key === "ArrowRight") { e.preventDefault(); (window as any).__qc?.correct?.(); }
-      if (e.key === "ArrowLeft")  { e.preventDefault(); (window as any).__qc?.wrong?.(); }
-      if (e.key.toLowerCase() === "f") { e.preventDefault(); (window as any).__qc?.flip?.(); }
+      if (e.key === "ArrowLeft")  { e.preventDefault(); (window as any).__qc?.wrong?.(false); }
+      if (e.code === "Space")     { e.preventDefault(); (window as any).__qc?.flip?.(); }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [phase]);
 
-  // Handlers passed to deck
+  // Handlers passed to deck (stop timer beep only if NOT a timeout)
   const handleScore = useCallback((points: number, newStreak: number) => {
     const now = Date.now(); const mul = now < doubleUntil ? 2 : 1;
     setScore((s) => s + points * mul); setStreak(newStreak);
   }, [doubleUntil]);
   const handleLifeLost = useCallback(() => { setLives((l) => Math.max(0, l - 1)); setStreak(0); }, []);
   const handleDeckProgress = useCallback((nCleared: number) => { setCleared(nCleared); }, []);
+  const handleSfxFromDeck = useCallback((kind: "correct" | "wrong", opts?: { byTimeout?: boolean }) => {
+    if (!opts?.byTimeout) stopSfx("timer"); // user-initiated answer: kill the timer beep immediately
+    playSfx(kind);
+  }, [playSfx, stopSfx]);
 
   const [burstKey, setBurstKey] = useState(0);
   const [burstKind, setBurstKind] = useState<"good" | "bad">("good");
-  const triggerBurst = useCallback((kind: "good" | "bad") => { setBurstKind(kind); setBurstKey((k) => k + 1); }, []);
+  const triggerBurst = useCallback((kind: "good" | "bad") => {
+    setBurstKind(kind);
+    setBurstKey((k) => k + 1);
+  }, []);
 
   const [toast, setToast] = useState<string | null>(null);
   const triggerPowerUp = useCallback((kind: "time" | "double" | "freeze") => {
@@ -511,16 +614,20 @@ export default function FlashcardsPage() {
         />
       </div>
 
-      {/* Tiny radial burst when scoring/miss */}
+      {/* Stronger radial burst when scoring/miss */}
       <AnimatePresence key={burstKey}>
         <motion.div
-          key={`burst-${burstKey}`} className="pointer-events-none absolute inset-0"
-          initial={{ opacity: 0 }} animate={{ opacity: 0.6 }} exit={{ opacity: 0 }} transition={{ duration: 0.25 }}
+          key={`burst-${burstKey}`}
+          className="pointer-events-none absolute inset-0"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 0.85 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.35 }}
           style={{
             background:
               burstKind === "good"
-                ? "radial-gradient(600px circle at center, rgba(16,185,129,0.18), transparent 60%)"
-                : "radial-gradient(600px circle at center, rgba(239,68,68,0.22), transparent 60%)",
+                ? "radial-gradient(800px circle at center, rgba(16,185,129,0.40), transparent 58%), radial-gradient(1400px circle at center, rgba(16,185,129,0.18), transparent 70%)"
+                : "radial-gradient(800px circle at center, rgba(239,68,68,0.45), transparent 58%), radial-gradient(1400px circle at center, rgba(239,68,68,0.20), transparent 70%)",
           }}
         />
       </AnimatePresence>
@@ -532,7 +639,8 @@ export default function FlashcardsPage() {
           <div className="absolute inset-0 grid place-items-center p-4 backdrop-blur-sm bg-black/30">
             <div className={["transition-opacity duration-500", textFadingOut ? "opacity-0" : "opacity-100"].join(" ")}>
               <BlurText
-                text="Welcome to Flashcards" delay={200} animateBy="words" direction="top"
+                text={loadingTerms ? "Loading set..." : "Welcome to Flashcards"}
+                delay={200} animateBy="words" direction="top"
                 onAnimationComplete={() => {}} className="text-white text-3xl sm:text-4xl md:text-5xl font-extrabold mb-6 text-center"
               />
             </div>
@@ -576,9 +684,17 @@ export default function FlashcardsPage() {
               </div>
             </div>
 
-            {/* Timer (top-right) */}
-            <div className="absolute top-10 right-4">
-              <AnimatedCounter value={timeLeft} places={2} fontSize={32} padding={0} gap={4} textColor="white" fontWeight={900} />
+            {/* Timer (top-right) — turns red at ≤5s */}
+            <div className={`absolute top-10 right-4 ${timeLeft <= 5 ? "animate-pulse" : ""}`}>
+              <AnimatedCounter
+                value={timeLeft}
+                places={2}
+                fontSize={32}
+                padding={0}
+                gap={4}
+                textColor={timeLeft <= 5 ? "#ff4747" : "white"}
+                fontWeight={900}
+              />
             </div>
 
             {/* Streak glow line when hot */}
@@ -607,13 +723,14 @@ export default function FlashcardsPage() {
             {/* Deck */}
             <div className="h-full w-full grid place-items-center p-4">
               <FlashcardDeck
-                terms={DEMO_TERMS}
+                terms={terms}
                 difficulty={difficulty}
                 onScore={(p, s) => handleScore(p, s)}
                 onLifeLost={handleLifeLost}
                 onDeckProgress={(n) => handleDeckProgress(n)}
                 onBurst={(k) => triggerBurst(k)}
                 onPowerUp={(k) => triggerPowerUp(k)}
+                onSfx={handleSfxFromDeck}
                 size={cardSize}
               />
             </div>
