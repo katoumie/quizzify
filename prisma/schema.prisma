@@ -21,19 +21,21 @@ model User {
   createdAt    DateTime @default(now())
   role         Role     @default(STUDENT)
 
-  folders       Folder[]
-  sets          StudySet[]
-  likes         Like[]
-  studyDays     StudyDay[]
-  StudyActivity StudyActivity[]
-  badges        UserBadge[]
+  folders    Folder[]
+  sets       StudySet[]
+  likes      Like[]
+  studyDays  StudyDay[]
+  activities StudyActivity[] // lowerCamelCase field name
+  badges     UserBadge[]
 
   // BKT
   mastery   UserSkillMastery[]
   responses Response[]
 
-  // Personal library of skills (NEW backref)
-  userSkills UserSkill[]
+  // Personal library of skills
+  userSkills  UserSkill[]
+  DuelSession DuelSession[]
+  DuelPlayer  DuelPlayer[]
 
   @@index([createdAt])
 }
@@ -76,9 +78,10 @@ model StudySet {
   cards   Card[]
   likedBy Like[]
 
-  // BKT: optional default skill for new cards in this set (can be overridden on each card)
-  defaultSkill   Skill?  @relation("StudySet_defaultSkill", fields: [defaultSkillId], references: [id])
+  // BKT: optional default skill for new cards in this set (can be overridden per card)
+  defaultSkill   Skill?        @relation("StudySet_defaultSkill", fields: [defaultSkillId], references: [id])
   defaultSkillId String?
+  DuelSession    DuelSession[]
 
   @@index([ownerId, createdAt])
   @@index([folderId, createdAt])
@@ -95,14 +98,14 @@ model Card {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  // NEW: distinguish “inherit default” (true) from “explicit” (false)
+  // distinguish “inherit default” from explicit per-card skill
   inheritDefault Boolean @default(true)
 
-  // Optional per-card media
+  // Optional media
   imageUrl String?
   imageAlt String?
 
-  // BKT Q-matrix links
+  // BKT links
   skills    CardSkill[]
   responses Response[]
 
@@ -136,18 +139,6 @@ model StudyDay {
   @@index([userId, day])
 }
 
-model Like {
-  userId    String
-  setId     String
-  createdAt DateTime @default(now())
-
-  user User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  set  StudySet @relation(fields: [setId], references: [id], onDelete: Cascade)
-
-  @@id([userId, setId])
-  @@index([setId])
-}
-
 /**
  * One row per user per calendar date (Postgres DATE) with a simple counter.
  */
@@ -164,20 +155,27 @@ model StudyActivity {
   @@index([userId, date])
 }
 
+model Like {
+  userId    String
+  setId     String
+  createdAt DateTime @default(now())
+
+  user User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  set  StudySet @relation(fields: [setId], references: [id], onDelete: Cascade)
+
+  @@id([userId, setId])
+  @@index([setId])
+}
+
 /**
  * =========================
  * Bayesian Knowledge Tracing (BKT)
  * =========================
  */
-
-/**
- * A skill/concept that cards can exercise.
- * Supports optional hierarchy (e.g., Science -> Biology).
- */
 model Skill {
   id       String @id @default(cuid())
-  name     String // display name (casing preserved)
-  nameNorm String @unique // NEW: lowercase + single-spaced + trimmed
+  name     String // display (casing preserved)
+  nameNorm String @unique // lowercase + single-spaced + trimmed
 
   parentId String?
   parent   Skill?  @relation("SkillHierarchy", fields: [parentId], references: [id])
@@ -188,10 +186,10 @@ model Skill {
 
   // Reverse relations
   cards      CardSkill[]
-  sets       StudySet[]         @relation("StudySet_defaultSkill") // backref for defaultSkill
-  userSkills UserSkill[] // backref for UserSkill
-  masteries  UserSkillMastery[] // backref for UserSkillMastery
-  responses  Response[] // backref for Response
+  sets       StudySet[]         @relation("StudySet_defaultSkill")
+  userSkills UserSkill[]
+  masteries  UserSkillMastery[]
+  responses  Response[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -223,15 +221,14 @@ model SkillAlias {
 }
 
 /**
- * Q-matrix mapping: which skills a card exercises (allowing multi-skill).
- * MVP can use single skill per card; schema supports many.
+ * Q-matrix mapping: which skills a card exercises (can be multi-skill).
  */
 model CardSkill {
   card    Card   @relation(fields: [cardId], references: [id], onDelete: Cascade)
   cardId  String
   skill   Skill  @relation(fields: [skillId], references: [id], onDelete: Cascade)
   skillId String
-  weight  Float  @default(1.0) // future: weighted updates
+  weight  Float  @default(1.0)
 
   @@id([cardId, skillId])
   @@index([skillId])
@@ -239,7 +236,6 @@ model CardSkill {
 
 /**
  * Global/skill-level BKT parameters.
- * pInit (P(L0)), pTransit (learn), slip, guess; optional forget.
  */
 model BKTParams {
   skill    Skill  @relation(fields: [skillId], references: [id], onDelete: Cascade)
@@ -248,7 +244,7 @@ model BKTParams {
   pTransit Float
   slip     Float
   guess    Float
-  forget   Float? // optional
+  forget   Float?
 
   updatedAt DateTime @updatedAt
 }
@@ -299,4 +295,120 @@ model Response {
   @@index([userId, createdAt])
   @@index([skillId, createdAt])
   @@index([cardId, createdAt])
+}
+
+/**
+ * =========================
+ * Duels (Arena / Team / Standard)
+ * =========================
+ */
+
+enum DuelMode {
+  ARENA
+  TEAM
+  STANDARD
+}
+
+enum DuelStatus {
+  LOBBY
+  RUNNING
+  ENDED
+  CANCELLED
+}
+
+enum RoundState {
+  PENDING
+  LIVE
+  RESOLVED
+}
+
+enum MatchResult {
+  A_WIN
+  B_WIN
+  BOTH_LOSE
+  BYE
+}
+
+model DuelSession {
+  id                 String     @id @default(cuid())
+  code               String     @unique
+  hostId             String
+  host               User       @relation(fields: [hostId], references: [id], onDelete: Cascade)
+  setId              String
+  set                StudySet   @relation(fields: [setId], references: [id], onDelete: Cascade)
+  mode               DuelMode
+  status             DuelStatus @default(LOBBY)
+  options            Json       @default("{}") // {timerMin, finite:boolean, shuffle:boolean, direction:"term|def|mixed"}
+  initialPlayerCount Int        @default(0)
+  createdAt          DateTime   @default(now())
+  startedAt          DateTime?
+  endedAt            DateTime?
+
+  players DuelPlayer[]
+  rounds  DuelRound[]
+}
+
+model DuelPlayer {
+  id           String      @id @default(cuid())
+  sessionId    String
+  session      DuelSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  userId       String?
+  user         User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  displayName  String
+  team         String? // "A" | "B" | null
+  lives        Int         @default(3)
+  score        Int         @default(0)
+  isReady      Boolean     @default(false)
+  connectedAt  DateTime    @default(now())
+  lastSeenAt   DateTime?
+  eliminatedAt DateTime?
+  byeCount     Int         @default(0)
+
+  // Back-refs
+  answers     DuelAnswer[]
+  matchupsAsA DuelMatchup[] @relation("MatchupA")
+  matchupsAsB DuelMatchup[] @relation("MatchupB")
+}
+
+model DuelRound {
+  id             String      @id @default(cuid())
+  sessionId      String
+  session        DuelSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  roundNo        Int
+  questionCardId String // references Card.id (string)
+  timerSec       Int
+  state          RoundState  @default(PENDING)
+  startedAt      DateTime?
+  endedAt        DateTime?
+
+  matchups DuelMatchup[]
+  answers  DuelAnswer[]
+
+  @@unique([sessionId, roundNo])
+}
+
+model DuelMatchup {
+  id      String    @id @default(cuid())
+  roundId String
+  round   DuelRound @relation(fields: [roundId], references: [id], onDelete: Cascade)
+
+  aId String
+  a   DuelPlayer @relation("MatchupA", fields: [aId], references: [id], onDelete: Cascade)
+  bId String
+  b   DuelPlayer @relation("MatchupB", fields: [bId], references: [id], onDelete: Cascade)
+
+  result MatchResult?
+}
+
+model DuelAnswer {
+  id       String     @id @default(cuid())
+  roundId  String
+  round    DuelRound  @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  playerId String
+  player   DuelPlayer @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  choiceIndex Int
+  isCorrect   Boolean
+  responseMs  Int
+  createdAt   DateTime @default(now())
 }

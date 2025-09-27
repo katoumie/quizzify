@@ -9,11 +9,13 @@ export type BKTParams = {
 
 export const DEFAULT_BKT: BKTParams = {
   pInit:   0.20,
-  pTransit:0.04,
+  pTransit:0.10,  // ↑ from 0.04
   slip:    0.10,
-  guess:   0.30,
-  forget:  0.015, // ≈1.5% per day
+  guess:   0.18,  // ↓ from 0.30
+  forget:  0.01,     // set 0 while validating; reintroduce later if you like
 };
+
+
 
 export function clamp01(x: number) { return Math.max(0, Math.min(1, x)); }
 
@@ -62,24 +64,29 @@ export function nextReviewDateFrom(
 ) {
   const P = clamp01(pKnow);
 
-  // If no forgetting, fall back to a simple, literature-style ladder.
+  // No forgetting → simple ladder
   if (!p.forget || p.forget <= 0) {
-    const d =
-      P < 0.60 ? 0 :
-      P < 0.75 ? 1 :
-      P < 0.85 ? 3 :
-      P < 0.95 ? 7 : 14;
-    const at = new Date(now.getTime() + d * 86400000);
-    return { next: at, days: d };
+    const d = P < 0.60 ? 0 : P < 0.75 ? 1 : P < 0.85 ? 3 : P < 0.95 ? 7 : 14;
+    return { next: new Date(now.getTime() + d * 86400000), days: d };
   }
 
-  // Solve P * (1 - f)^d = threshold → d = ln(thr/P) / ln(1 - f)
-  const f = Math.min(0.2, Math.max(1e-6, p.forget)); // numeric safety
+  // With forgetting → decay math + optional minimums
+  const f = Math.min(0.2, Math.max(1e-6, p.forget));
   if (P <= 0) return { next: now, days: 0 };
-  if (P <= threshold) return { next: now, days: 0 };
 
-  const d = Math.log(threshold / P) / Math.log(1 - f);
-  const days = Math.max(0, Math.floor(d));
-  const at = new Date(now.getTime() + days * 86400000);
-  return { next: at, days };
+  // minimum-day guard (so first correct isn’t “due now”)
+  const minDays =
+    P < 0.60 ? 0 :
+    P < 0.75 ? 1 :
+    P < 0.85 ? 3 :
+    0;
+
+  if (P <= threshold) {
+    const d = Math.max(minDays, 0);
+    return { next: new Date(now.getTime() + d * 86400000), days: d };
+  }
+
+  const dMath = Math.log(threshold / P) / Math.log(1 - f);
+  const days = Math.max(minDays, Math.floor(Math.max(0, dMath)));
+  return { next: new Date(now.getTime() + days * 86400000), days };
 }

@@ -2,6 +2,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { Dispatch, SetStateAction } from "react";
 import type { SetCardData } from "@/components/SetCard";
 import { useRouter, useSearchParams } from "next/navigation";
 import { INPUT_BG } from "@/components/set-form/constants";
@@ -14,6 +15,54 @@ type FilterKey = "all" | "public" | "private" | "friends" | "liked";
 type OrderKey = "updated" | "likes" | "name";
 
 type FolderLite = { id: string; name: string; createdAt: string; _count: { sets: number } };
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Helper: persist unlike on the backend and keep local lists in sync
+────────────────────────────────────────────────────────────────────────── */
+async function unlikeSetForUser(
+  setId: string,
+  userId: string,
+  update: {
+    setLikedSets: Dispatch<SetStateAction<SetCardData[]>>;
+    setRecentSets: Dispatch<SetStateAction<SetCardData[]>>;
+  }
+) {
+  // Try JSON body first (common pattern in this app)
+  let res = await fetch(`/api/sets/${encodeURIComponent(setId)}/like`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    // include both userId and ownerId for maximum compatibility with your routes
+    body: JSON.stringify({ userId, ownerId: userId }),
+  });
+
+  // Fallback to query-string if needed
+  if (!res.ok) {
+    res = await fetch(
+      `/api/sets/${encodeURIComponent(setId)}/like?userId=${encodeURIComponent(userId)}`,
+      { method: "DELETE", credentials: "same-origin" }
+    );
+  }
+
+  let js: any = {};
+  try {
+    js = await res.json();
+  } catch {
+    // ignore JSON parse errors
+  }
+
+  if (!res.ok) {
+    throw new Error(js?.error || "Failed to unlike.");
+  }
+
+  // Success → remove from likedSets and decrement likeCount in recentSets
+  update.setLikedSets((r) => r.filter((x) => x.id !== setId));
+  update.setRecentSets((r) =>
+    r.map((x) =>
+      x.id === setId ? { ...x, likeCount: Math.max(0, (x.likeCount ?? 0) - 1) } : x
+    )
+  );
+}
 
 export default function LibraryPage() {
   const router = useRouter();
@@ -169,7 +218,7 @@ export default function LibraryPage() {
     return list;
   }, [searched, order]);
 
-  // Rel-time helper
+  // Real-time helper
   const fmtRel = (iso: string) => {
     const d = new Date(iso);
     const diff = Date.now() - d.getTime();
@@ -204,17 +253,25 @@ export default function LibraryPage() {
   };
 
   // Handle selection coming from modal
-  const onPickStudy = (
+  const onPickStudy = async (
     mode: "learn" | "flashcards" | "duels",
-    opts?: { difficulty?: "easy" | "medium" | "hard"; mute?: boolean; scope?: "all" | "recommended"; shuffle?: boolean; untimed?: boolean }
+    opts?: {
+      difficulty?: "easy" | "medium" | "hard";
+      mute?: boolean;
+      scope?: "all" | "recommended";
+      shuffle?: boolean;
+      untimed?: boolean;
+      duelsMode?: "ARENA" | "TEAM" | "STANDARD";
+    }
   ) => {
     if (!studyTarget) return;
+
     if (mode === "flashcards") {
       const diff = opts?.difficulty ?? "easy";
       const q = new URLSearchParams();
       q.set("difficulty", diff);
       if (opts?.mute) q.set("mute", "1");
-      q.set("scope", (opts?.scope ?? "all"));
+      q.set("scope", opts?.scope ?? "all");
       if (opts?.shuffle) q.set("shuffle", "1");
       if (opts?.untimed) q.set("untimed", "1");
       const url = `/sets/${studyTarget.id}/flashcards?${q.toString()}`;
@@ -222,12 +279,37 @@ export default function LibraryPage() {
       router.push(url);
       return;
     }
-    const base = `/sets/${studyTarget.id}`;
-    const path = mode === "learn" ? `${base}/learn` : `${base}/duels`;
-    closeStudy();
-    router.push(path);
-  };
 
+    if (mode === "learn") {
+      const url = `/sets/${studyTarget.id}/learn`;
+      closeStudy();
+      router.push(url);
+      return;
+    }
+
+    // NEW: Duels → create lobby then navigate to /duels/[code]
+    if (mode === "duels") {
+      try {
+        const res = await fetch(`/api/duels`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            setId: studyTarget.id,
+            mode: opts?.duelsMode ?? "ARENA", // <- pass chosen mode
+            options: {},
+            hostId: ownerId ?? undefined,     // if available, use as host
+          }),
+        });
+        const js = await res.json().catch(() => ({} as any));
+        if (!res.ok || !js?.code) throw new Error(js?.error || "Failed to create duels lobby.");
+        closeStudy();
+        router.push(`/duels/${js.code}`);
+      } catch (e: any) {
+        alert(e?.message || "Could not start Duels. Please try again.");
+      }
+      return;
+    }
+  };
 
   return (
     <>
@@ -465,12 +547,14 @@ export default function LibraryPage() {
                             }
                           }}
                           onUnlike={async () => {
+                            if (!ownerId) {
+                              alert("Missing user id. Please sign in again.");
+                              return;
+                            }
                             try {
-                              await fetch(`/api/sets/${s.id}/like`, { method: "DELETE" });
-                              // Optimistic update
-                              setLikedSets((r) => r.filter((x) => x.id !== s.id));
-                            } catch {
-                              alert("Failed to unlike. Please try again.");
+                              await unlikeSetForUser(s.id, ownerId, { setLikedSets, setRecentSets });
+                            } catch (e: any) {
+                              alert(e?.message || "Failed to unlike. Please try again.");
                             }
                           }}
                         />
@@ -731,40 +815,40 @@ function SplitPill({
         )}
       </div>
 
-       {/* Dropdown */}
-        {open && (
-          <div className="absolute right-0 z-40 mt-1 w-36 overflow-hidden rounded-md bg-[#18062e] py-1 text-[12px] shadow-lg ring-1 ring-white/20">
-            {/* NEW: always available */}
+      {/* Dropdown */}
+      {open && (
+        <div className="absolute right-0 z-40 mt-1 w-36 overflow-hidden rounded-md bg-[#18062e] py-1 text-[12px] shadow-lg ring-1 ring-white/20">
+          {/* NEW: always available */}
+          <button
+            className="block w-full px-3 py-1.5 text-left text-white hover:bg-white/10"
+            onClick={() => { setOpen(false); onViewStats?.(); }}
+          >
+            View set statistics
+          </button>
+
+          {isOwner && (
             <button
               className="block w-full px-3 py-1.5 text-left text-white hover:bg-white/10"
-              onClick={() => { setOpen(false); onViewStats?.(); }}
+              onClick={async () => { setOpen(false); await onDelete(); }}
             >
-              View set statistics
+              Delete
             </button>
+          )}
+          {isLiked && !isOwner && (
+            <button
+              className="block w-full px-3 py-1.5 text-left text-white hover:bg-white/10"
+              onClick={async () => { setOpen(false); await onUnlike(); }}
+            >
+              Unlike
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
-            {isOwner && (
-              <button
-                className="block w-full px-3 py-1.5 text-left text-white hover:bg-white/10"
-                onClick={async () => { setOpen(false); await onDelete(); }}
-              >
-                Delete
-              </button>
-            )}
-            {isLiked && !isOwner && (
-              <button
-                className="block w-full px-3 py-1.5 text-left text-white hover:bg-white/10"
-                onClick={async () => { setOpen(false); await onUnlike(); }}
-              >
-                Unlike
-              </button>
-            )}
-          </div>
-        )}
-      </div>
-    );
-  }
-
-/* ===== Study Modal (with Flashcards settings step) ===== */
+/* ===== Study Modal (with Flashcards + Duels settings steps) ===== */
 function StudyModal({
   open,
   title,
@@ -780,12 +864,16 @@ function StudyModal({
     scope?: "all" | "recommended";
     shuffle?: boolean;
     untimed?: boolean;
+    duelsMode?: "ARENA" | "TEAM" | "STANDARD"; // <- NEW
   }) => void;
 }) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
-  // Step management
-  const [step, setStep] = useState<"choose" | "flashcards">("choose");
+  // Steps
+  const [step, setStep] = useState<"choose" | "flashcards" | "duels">("choose");
+
+  // NEW: Duels mode picker
+  const [duelsMode, setDuelsMode] = useState<"ARENA" | "TEAM" | "STANDARD">("ARENA");
 
   // Flashcards options
   const [difficulty, setDifficulty] = useState<"easy" | "medium" | "hard">("easy");
@@ -802,6 +890,7 @@ function StudyModal({
       setScope("all");
       setShuffle(false);
       setUntimed(false);
+      setDuelsMode("ARENA"); // reset duels mode
     }
   }, [open]);
 
@@ -875,7 +964,9 @@ function StudyModal({
                 <div className="text-[15px] font-medium">
                   {step === "choose"
                     ? `How do you want to study${title ? `: ${title}` : ""}?`
-                    : "Flashcards • Quick settings"}
+                    : step === "flashcards"
+                    ? "Flashcards • Quick settings"
+                    : "Duels • Choose mode"}
                 </div>
               </div>
               <button type="button" onClick={onClose} className="grid h-8 w-8 place-items-center rounded-md text-white/70 hover:text-white hover:bg-white/10" aria-label="Close">
@@ -889,9 +980,9 @@ function StudyModal({
               <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2">
                 <Tile id="study-learn" label="Learn" sub="Guided practice" icon="/icons/learn.svg" onClick={() => onPick("learn")} />
                 <Tile id="study-flashcards" label="Flashcards" sub="Classic cards" icon="/icons/flashcards.svg" onClick={() => setStep("flashcards")} />
-                <Tile id="study-duels" label="Duels" sub="Challenge mode" icon="/icons/duels.svg" onClick={() => onPick("duels")} />
+                <Tile id="study-duels" label="Duels" sub="Challenge mode" icon="/icons/duels.svg" onClick={() => setStep("duels")} />
               </div>
-            ) : (
+            ) : step === "flashcards" ? (
               <div className="mt-3 space-y-3">
                 {/* Difficulty radios */}
                 <div className="grid gap-2">
@@ -958,6 +1049,95 @@ function StudyModal({
                   </button>
                 </div>
               </div>
+            ) : (
+              // --- NEW: Duels settings step ---
+              <div className="mt-3 space-y-3">
+                <div className="grid gap-2">
+                  <label
+                    className={[
+                      "flex items-center justify-between rounded-[10px] p-3 ring-1 transition cursor-pointer",
+                      duelsMode === "ARENA" ? "bg-white/5 ring-white/30" : "ring-white/12 hover:bg-white/5",
+                      "text-white/90",
+                    ].join(" ")}
+                  >
+                    <div>
+                      <div className="text-[14px] font-semibold">Arena</div>
+                      <div className="text-[12px] text-white/70">Lives + 1v1 pairings, fastest correct wins.</div>
+                    </div>
+                    <input
+                      type="radio"
+                      name="duels-mode"
+                      checked={duelsMode === "ARENA"}
+                      onChange={() => setDuelsMode("ARENA")}
+                    />
+                  </label>
+
+                  <label
+                    className={[
+                      "flex items-center justify-between rounded-[10px] p-3 ring-1 transition cursor-pointer",
+                      duelsMode === "TEAM" ? "bg-white/5 ring-white/30" : "ring-white/12 hover:bg-white/5",
+                      "text-white/90",
+                    ].join(" ")}
+                  >
+                    <div>
+                      <div className="text-[14px] font-semibold">Team</div>
+                      <div className="text-[12px] text-white/70">Two teams compete; faster correct answers score more.</div>
+                    </div>
+                    <input
+                      type="radio"
+                      name="duels-mode"
+                      checked={duelsMode === "TEAM"}
+                      onChange={() => setDuelsMode("TEAM")}
+                    />
+                  </label>
+
+                  <label
+                    className={[
+                      "flex items-center justify-between rounded-[10px] p-3 ring-1 transition cursor-pointer",
+                      duelsMode === "STANDARD" ? "bg-white/5 ring-white/30" : "ring-white/12 hover:bg-white/5",
+                      "text-white/90",
+                    ].join(" ")}
+                  >
+                    <div>
+                      <div className="text-[14px] font-semibold">Standard (FFA)</div>
+                      <div className="text-[12px] text-white/70">Everyone answers; fastest correct gets most points.</div>
+                    </div>
+                    <input
+                      type="radio"
+                      name="duels-mode"
+                      checked={duelsMode === "STANDARD"}
+                      onChange={() => setDuelsMode("STANDARD")}
+                    />
+                  </label>
+                </div>
+
+                <div className="mt-3 flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setStep("choose")}
+                    className="h-8 px-2.5 rounded-[6px] text-white/80 hover:text-white ring-1 ring-white/12 hover:bg-white/10 text-sm font-medium"
+                  >
+                    Back
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onPick("duels", { duelsMode })}
+                    className={[
+                      "inline-flex items-center gap-1.5 rounded-[6px]",
+                      "h-8 px-2.5",
+                      "text-white/90 hover:text-white",
+                      "bg-[#532e95] hover:bg-[#5f3aa6] active:bg-[#472b81]",
+                      "ring-1 ring-white/20 hover:ring-white/10",
+                      "transition-colors text-sm font-medium",
+                    ].join(" ")}
+                  >
+                    <span className="grid h-[14px] w-[14px] place-items-center">
+                      <img src="/icons/duels.svg" alt="" className="h-[14px] w-[14px] block" aria-hidden="true" />
+                    </span>
+                    <span>Create lobby</span>
+                  </button>
+                </div>
+              </div>
             )}
           </div>
         </div>
@@ -965,4 +1145,3 @@ function StudyModal({
     </div>
   );
 }
-

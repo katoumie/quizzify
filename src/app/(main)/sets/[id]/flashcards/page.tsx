@@ -9,7 +9,6 @@ import SvgFileIcon from "@/components/SvgFileIcon";
 import { motion, AnimatePresence } from "framer-motion";
 import type { TargetAndTransition } from "framer-motion";
 
-
 /* ──────────────────────────────────────────────────────────────────────────
    Types & constants
 ────────────────────────────────────────────────────────────────────────── */
@@ -20,7 +19,6 @@ const STORAGE_PREFIX = "qz_flashcards_prefs_";
 
 type Term = { id: string; front: string; back: string };
 type InEvent = { cardId: string; correct: boolean; timeMs?: number | null };
-
 
 // Demo fallback (used only for scope=all on failure/empty)
 const DEMO_TERMS: Term[] = [
@@ -163,7 +161,7 @@ function formatDateLocal(iso: string): string {
 ────────────────────────────────────────────────────────────────────────── */
 function FlashcardDeck({
   terms, difficulty, onScore, onLifeLost, onDeckProgress, onBurst, onPowerUp, onSfx, size, untimed,
-  onAnswer, // ← add this
+  onAnswer,
 }: {
   terms: Term[]; difficulty: Difficulty; untimed: boolean;
   onScore: (pointsGained: number, newStreak: number) => void;
@@ -173,7 +171,7 @@ function FlashcardDeck({
   onPowerUp: (kind: "time" | "double" | "freeze") => void;
   onSfx: (kind: "correct" | "wrong", opts?: { byTimeout?: boolean }) => void;
   size: { width: number; height: number };
-  onAnswer?: (cardId: string, correct: boolean, byTimeout?: boolean) => void; // ← add this
+  onAnswer?: (cardId: string, correct: boolean, byTimeout?: boolean) => void;
 }) {
   const [order, setOrder] = useState<number[]>(() => terms.map((_, i) => i));
   const [flipped, setFlipped] = useState(false);
@@ -203,6 +201,11 @@ function FlashcardDeck({
     setAnimState("idle");
   }, []);
 
+  // ✅ Notify parent AFTER render when cleared changes (never during render)
+  useEffect(() => {
+    onDeckProgress(cleared, total);
+  }, [cleared, total, onDeckProgress]);
+
   const markCorrect = useCallback(() => {
     if (!top) return;
     setAnimState("right");
@@ -215,12 +218,13 @@ function FlashcardDeck({
       const newStreak = streak + 1; setStreak(newStreak); onScore(points, newStreak);
     }
 
-    setCleared((c) => { const n = c + 1; onDeckProgress(n, total); return n; });
+    // ❌ no onDeckProgress here — let the effect above notify after state updates
+    setCleared((c) => c + 1);
     onBurst("good");
     const roll = Math.random();
     if (roll < 0.06) onPowerUp("time"); else if (roll < 0.12) onPowerUp("freeze"); else if (roll < 0.18) onPowerUp("double");
     setTimeout(nextCard, 340);
-  }, [top, base, comboMultiplier, streak, onScore, onDeckProgress, onBurst, onPowerUp, nextCard, total, onSfx, untimed]);
+  }, [top, base, comboMultiplier, streak, onScore, onBurst, onPowerUp, nextCard, onSfx, untimed, onAnswer]);
 
   const markIncorrect = useCallback((byTimeout: boolean = false) => {
     if (!top) return;
@@ -232,10 +236,11 @@ function FlashcardDeck({
       setStreak(0); onLifeLost();
     }
 
-    setCleared((c) => { const n = c + 1; onDeckProgress(n, total); return n; });
+    // ❌ no onDeckProgress here — effect will notify
+    setCleared((c) => c + 1);
     onBurst("bad");
     setTimeout(nextCard, 340);
-  }, [top, onLifeLost, onDeckProgress, total, nextCard, onSfx, onBurst, untimed]);
+  }, [top, onLifeLost, nextCard, onSfx, onBurst, untimed, onAnswer]);
 
   // expose keyboard helpers
   useEffect(() => {
@@ -444,7 +449,7 @@ export default function FlashcardsPage() {
   const [introCount, setIntroCount] = useState<number>(3);
 
   // Data (REAL set data with fallback for scope=all only)
-  const [terms, setTerms] = useState<Term[]>([]);             // ← start empty (no early demo)
+  const [terms, setTerms] = useState<Term[]>([]);
   const [loadingTerms, setLoadingTerms] = useState(true);
 
   // Recommended guard + next-review popup
@@ -458,17 +463,15 @@ export default function FlashcardsPage() {
     return res.json();
   }
   async function fetchRecommendedIds(setId: string): Promise<string[]> {
-  const userId = getUserId();
-  const qs = new URLSearchParams();
-  if (userId) qs.set("userId", userId);
-  // keep any other query flags you want (e.g., scope) — they’re ignored server-side
-  const res = await fetch(`/api/sets/${setId}/recommendations?${qs.toString()}`, { cache: "no-store" });
-  if (!res.ok) return [];
-  const data = await res.json() as { cardIds?: string[] };
-  return Array.isArray(data.cardIds) ? data.cardIds : [];
-}
+    const userId = getUserId();
+    const qs = new URLSearchParams();
+    if (userId) qs.set("userId", userId);
+    const res = await fetch(`/api/sets/${setId}/recommendations?${qs.toString()}`, { cache: "no-store" });
+    if (!res.ok) return [];
+    const data = (await res.json()) as { cardIds?: string[] };
+    return Array.isArray(data.cardIds) ? data.cardIds : [];
+  }
 
-  
   type StatsSkill = {
     skillId: string;
     skillName: string;
@@ -545,7 +548,6 @@ export default function FlashcardsPage() {
             const dict = new Map(mapped.map(t => [t.id, t]));
             const filtered: Term[] = ids.map(id => dict.get(String(id))).filter(Boolean) as Term[];
             if (filtered.length === 0) {
-              // ID mismatch or nothing matched → treat as empty recommended
               setTerms([]);
               setShowEmptyPopup(true);
             } else {
@@ -554,8 +556,7 @@ export default function FlashcardsPage() {
             }
           }
         }
-      } catch (e) {
-        // On error: NEVER fall back to demo when scope=recommended
+      } catch {
         if (!cancelled) {
           if (scope === "recommended") {
             setTerms([]);
@@ -584,49 +585,49 @@ export default function FlashcardsPage() {
   const total = terms.length;
 
   // ── Step 3: Study events buffer → POST /api/study/events
-const [evBuf, setEvBuf] = useState<InEvent[]>([]);
+  const [evBuf, setEvBuf] = useState<InEvent[]>([]);
 
-// called by the deck when a card is answered
-const handleAnswer = useCallback((cardId: string, correct: boolean, _byTimeout?: boolean) => {
-  setEvBuf((buf) => [...buf, { cardId, correct }]);
-}, []);
+  // called by the deck when a card is answered
+  const handleAnswer = useCallback((cardId: string, correct: boolean, _byTimeout?: boolean) => {
+    setEvBuf((buf) => [...buf, { cardId, correct }]);
+  }, []);
 
-// flush to the server; keepalive allows it to send during nav/unload
-const flushEvents = useCallback(async () => {
-  if (evBuf.length === 0) return;
-  const userId = getUserId();
-  try {
-    await fetch("/api/study/events", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId, setId, events: evBuf }),
-      keepalive: true,
-    });
-  } catch {
-    // ignore network failures; next flush will retry with new events
-  }
-  setEvBuf([]);
-}, [evBuf, setId]);
+  // flush to the server; keepalive allows it to send during nav/unload
+  const flushEvents = useCallback(async () => {
+    if (evBuf.length === 0) return;
+    const userId = getUserId();
+    try {
+      await fetch("/api/study/events", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, setId, events: evBuf }),
+        keepalive: true,
+      });
+    } catch {
+      // ignore network failures; next flush will retry with new events
+    }
+    setEvBuf([]);
+  }, [evBuf, setId]);
 
-// auto-flush if buffer grows
-useEffect(() => {
-  if (evBuf.length >= 10) void flushEvents();
-}, [evBuf.length, flushEvents]);
+  // auto-flush if buffer grows
+  useEffect(() => {
+    if (evBuf.length >= 10) void flushEvents();
+  }, [evBuf.length, flushEvents]);
 
-// flush at end of session & on page unload
-useEffect(() => {
-  const onUnload = () => { void flushEvents(); };
-  window.addEventListener("pagehide", onUnload);
-  window.addEventListener("beforeunload", onUnload);
-  return () => {
-    window.removeEventListener("pagehide", onUnload);
-    window.removeEventListener("beforeunload", onUnload);
-  };
-}, [flushEvents]);
+  // flush at end of session & on page unload
+  useEffect(() => {
+    const onUnload = () => { void flushEvents(); };
+    window.addEventListener("pagehide", onUnload);
+    window.addEventListener("beforeunload", onUnload);
+    return () => {
+      window.removeEventListener("pagehide", onUnload);
+      window.removeEventListener("beforeunload", onUnload);
+    };
+  }, [flushEvents]);
 
-useEffect(() => {
-  if (phase === "summary") void flushEvents();
-}, [phase, flushEvents]);
+  useEffect(() => {
+    if (phase === "summary") void flushEvents();
+  }, [phase, flushEvents]);
 
   // Dynamic particles color by urgency (untimed keeps a calm palette)
   const urgency = untimed ? 1 : Math.max(0, Math.min(1, timeLeft / initialSeconds || 0));
@@ -820,7 +821,12 @@ useEffect(() => {
     if (untimed) return;
     setLives((l) => Math.max(0, l - 1)); setStreak(0);
   }, [untimed]);
-  const handleDeckProgress = useCallback((nCleared: number) => { setCleared(nCleared); }, []);
+
+  // ✅ Defer parent state update so it never happens during child render
+  const handleDeckProgress = useCallback((nCleared: number) => {
+    queueMicrotask(() => setCleared(nCleared));
+  }, []);
+
   const handleSfxFromDeck = useCallback((kind: "correct" | "wrong", opts?: { byTimeout?: boolean }) => {
     if (!opts?.byTimeout) stopSfx("timer"); // user-initiated answer: kill the timer beep immediately
     playSfx(kind);                           // play correct/wrong SFX even in untimed

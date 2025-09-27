@@ -8,6 +8,7 @@ import {
   BarChart, XAxis, YAxis, CartesianGrid, Bar
 } from "recharts";
 
+/* ── Types ─────────────────────────────────────────────────────────────── */
 type SkillStat = {
   skillId: string;
   skillName: string;
@@ -17,14 +18,9 @@ type SkillStat = {
   correct7: number;
   wrong7: number;
 };
-
 type StatsPayload = {
   skills: SkillStat[];
-  totals: {
-    skills: number;
-    mastered: number;
-    nextDueAt: string | null; // next recommended review (soonest)
-  };
+  totals: { skills: number; mastered: number; nextDueAt: string | null };
 };
 
 type ItemStat = {
@@ -37,9 +33,9 @@ type ItemStat = {
   correct7: number;
   wrong7: number;
 };
-
 type ItemStatsPayload = { items: ItemStat[] };
 
+/* ── Utils ─────────────────────────────────────────────────────────────── */
 function getUserId(): string | null {
   try {
     const raw = localStorage.getItem("qz_auth");
@@ -48,18 +44,10 @@ function getUserId(): string | null {
     return typeof js?.id === "string" ? js.id : null;
   } catch { return null; }
 }
+const pct = (n: number) => `${Math.round(Math.max(0, Math.min(1, n)) * 100)}%`;
+const shortDate = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : "—");
 
-function pct(n: number) {
-  return `${Math.round(Math.max(0, Math.min(1, n)) * 100)}%`;
-}
-function shortDate(iso: string | null) {
-  if (!iso) return "—";
-  try { return new Date(iso).toLocaleString(); } catch { return iso; }
-}
-function trunc(s: string, n = 36) {
-  return s.length > n ? s.slice(0, n - 1) + "…" : s;
-}
-
+/* ── Page ──────────────────────────────────────────────────────────────── */
 export default function SetStatisticsPage() {
   const { id: setId } = useParams<{ id: string }>();
   const [stats, setStats] = useState<StatsPayload | null>(null);
@@ -93,24 +81,62 @@ export default function SetStatisticsPage() {
   const mastered = stats?.skills.filter(s => s.masteryAchieved).length ?? 0;
 
   // Weak items (lowest pKnow first)
-  const weakItems = useMemo(() => {
-    return (items ?? [])
-      .slice()
-      .sort((a, b) => a.pKnow - b.pKnow)
-      .slice(0, 10);
+  const weakItems = useMemo(() => (
+    (items ?? []).slice().sort((a, b) => a.pKnow - b.pKnow).slice(0, 10)
+  ), [items]);
+
+  // Per-item chart data (weakest 15). We hide x-axis labels; show in tooltip.
+  const itemChartData = useMemo(() => {
+    const src = (items ?? []).slice().sort((a, b) => a.pKnow - b.pKnow).slice(0, 15);
+    return src.map(it => ({ label: it.term, pKnow: Math.round(it.pKnow * 100) }));
   }, [items]);
 
-  // Chart dataset for per-item mastery (take up to 15 weakest)
-  const itemChartData = useMemo(() => {
-    const src = (items ?? [])
-      .slice()
-      .sort((a, b) => a.pKnow - b.pKnow)
-      .slice(0, 15);
-    return src.map(it => ({ name: trunc(it.term, 14), pKnow: Math.round(it.pKnow * 100) }));
+  // Skill chart data. Hide x-axis labels; show in tooltip.
+  const skillChartData = useMemo(() => (
+    (stats?.skills ?? []).map(s => ({ label: s.skillName, pKnow: Math.round(s.pKnow * 100) }))
+  ), [stats]);
+
+  // Due forecast (next 14 days) — bin by local calendar day
+  const dueBins = useMemo(() => {
+    const DAY = 86_400_000;
+
+    // start-of-today (local)
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayStart = today.getTime();
+
+    // build 14 daily buckets with calendar labels
+    const bins = Array.from({ length: 14 }, (_, i) => ({
+      dayIdx: i,
+      label: new Date(todayStart + i * DAY).toLocaleDateString(),
+      count: 0,
+    }));
+
+    for (const it of (items ?? [])) {
+      if (!it.nextReviewAt) continue;
+      const due = new Date(it.nextReviewAt);
+      if (isNaN(+due)) continue;
+
+      // snap due to its calendar day (local)
+      due.setHours(0, 0, 0, 0);
+      const d = Math.floor((+due - todayStart) / DAY);
+
+      if (d >= 0 && d < bins.length) bins[d].count += 1;
+    }
+    return bins;
   }, [items]);
 
   return (
     <main className="p-4">
+      {/* dark, rounded scrollbar for our scroll containers */}
+      <style jsx global>{`
+        .qz-scroll::-webkit-scrollbar { width: 10px; }
+        .qz-scroll::-webkit-scrollbar-track { background: rgba(255,255,255,0.06); border-radius: 12px; }
+        .qz-scroll::-webkit-scrollbar-thumb { background: rgba(168,177,255,0.35); border-radius: 12px; }
+        .qz-scroll::-webkit-scrollbar-thumb:hover { background: rgba(168,177,255,0.55); }
+        .qz-scroll { scrollbar-color: rgba(168,177,255,0.45) rgba(255,255,255,0.06); scrollbar-width: thin; }
+      `}</style>
+
       <h1 className="text-white text-xl font-semibold mb-3">Set Statistics</h1>
 
       {loading ? (
@@ -137,7 +163,15 @@ export default function SetStatisticsPage() {
                     <Cell fill="#22c55e" />
                     <Cell fill="#a78bfa" />
                   </Pie>
-                  <Tooltip />
+                  <Tooltip
+                    contentStyle={{
+                      background: "#1b1230",
+                      border: "1px solid rgba(255,255,255,0.15)",
+                      color: "#fff",
+                    }}
+                    labelStyle={{ color: "#fff" }}
+                    itemStyle={{ color: "#fff" }}
+                  />
                 </PieChart>
               </ResponsiveContainer>
             </div>
@@ -146,45 +180,43 @@ export default function SetStatisticsPage() {
             </div>
           </div>
 
-          {/* Bar: p(Know) per skill */}
+          {/* Skill pKnow (hide x labels; show in tooltip) */}
           <div className="rounded-xl border border-white/10 bg-white/5 p-4">
             <div className="text-white/90 font-medium mb-2">Skill mastery (pKnow)</div>
             <div className="h-64">
               <ResponsiveContainer>
-                <BarChart data={stats.skills.map(s => ({ name: s.skillName, pKnow: Math.round(s.pKnow * 100) }))}>
+                <BarChart data={skillChartData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
-                  <XAxis dataKey="name" stroke="#fff" fontSize={12} />
+                  <XAxis dataKey="label" hide />
                   <YAxis stroke="#fff" fontSize={12} />
-                  <Tooltip />
+                  <Tooltip
+                    cursor={{ fill: "rgba(255,255,255,0.05)" }}
+                    formatter={(v: number) => [`${v}%`, "pKnow"]}
+                    labelFormatter={(l: string) => l}
+                    contentStyle={{ background: "#1b1230", border: "1px solid rgba(255,255,255,0.15)" }}
+                  />
                   <Bar dataKey="pKnow" fill="#60a5fa" />
                 </BarChart>
               </ResponsiveContainer>
             </div>
           </div>
 
-          {/* Weak items (lowest pKnow) */}
-          <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+          {/* Weak items list (scroll) */}
+          <div className="rounded-xl border border-white/10 bg-white/5 p-4 lg:row-span-2">
             <div className="text-white/90 font-medium mb-2">Weak items (lowest pKnow)</div>
-
             {(!items || items.length === 0) ? (
               <div className="text-white/70 text-sm">No per-item data yet.</div>
             ) : (
-              <ul className="space-y-2">
+              <ul className="qz-scroll max-h-[520px] overflow-auto space-y-2 pr-2">
                 {weakItems.map((it) => (
-                  <li
-                    key={it.cardId}
-                    className="rounded-lg bg-white/5 ring-1 ring-white/10 p-3"
-                  >
-                    <div className="flex items-center justify-between gap-3">
+                  <li key={it.cardId} className="rounded-lg bg-white/5 ring-1 ring-white/10 p-3">
+                    <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="text-white font-medium truncate">{it.term}</div>
-                        <div className="text-white/60 text-xs">
-                          Skill: <span className="text-white/80">{it.skillName}</span>
-                        </div>
+                        <div className="text-white/60 text-xs">Skill: <span className="text-white/80">{it.skillName}</span></div>
                       </div>
-
                       <div className="text-right">
-                        <div className="text-sm text-white/80">pKnow</div>
+                        <div className="text-xs text-white/70">pKnow</div>
                         <div className="text-white font-semibold">{pct(it.pKnow)}</div>
                       </div>
                     </div>
@@ -200,7 +232,7 @@ export default function SetStatisticsPage() {
                       />
                     </div>
 
-                    {/* Mini footer: recent accuracy + due */}
+                    {/* Mini footer */}
                     <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-white/70">
                       <span>7d: <span className="text-white/85">{it.correct7}</span>✓ / <span className="text-white/85">{it.wrong7}</span>✗</span>
                       <span>Last seen: <span className="text-white/85">{shortDate(it.lastSeenAt)}</span></span>
@@ -219,30 +251,40 @@ export default function SetStatisticsPage() {
               <ResponsiveContainer>
                 <BarChart data={itemChartData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
-                  <XAxis dataKey="name" stroke="#fff" fontSize={12} />
+                  <XAxis dataKey="label" hide />
                   <YAxis stroke="#fff" fontSize={12} />
-                  <Tooltip />
+                  <Tooltip
+                    cursor={{ fill: "rgba(255,255,255,0.05)" }}
+                    formatter={(v: number) => [`${v}%`, "pKnow"]}
+                    labelFormatter={(l: string) => l}
+                    contentStyle={{ background: "#1b1230", border: "1px solid rgba(255,255,255,0.15)" }}
+                  />
                   <Bar dataKey="pKnow" fill="#f59e0b" />
                 </BarChart>
               </ResponsiveContainer>
             </div>
           </div>
 
-          {/* Upcoming reviews (skills) */}
-          <div className="rounded-xl border border-white/10 bg-white/5 p-4 lg:col-span-2">
-            <div className="text-white/90 font-medium mb-2">Next recommended reviews (by skill)</div>
-            <ul className="space-y-1 text-white/85 text-sm">
-              {stats.skills
-                .filter(s => s.nextReviewAt)
-                .sort((a, b) => +new Date(a.nextReviewAt!) - +new Date(b.nextReviewAt!))
-                .slice(0, 10)
-                .map(s => (
-                  <li key={s.skillId} className="flex items-center justify-between">
-                    <span>{s.skillName}</span>
-                    <span className="text-white/70">{new Date(s.nextReviewAt!).toLocaleString()}</span>
-                  </li>
-              ))}
-            </ul>
+          {/* Due forecast (next 14 days) */}
+          <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+            <div className="text-white/90 font-medium mb-2">Due forecast (next 14 days)</div>
+            <div className="h-64">
+              <ResponsiveContainer>
+                <BarChart data={dueBins}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
+                  <XAxis dataKey="label" hide />
+                  <YAxis stroke="#fff" fontSize={12} allowDecimals={false} />
+                  <Tooltip
+                    cursor={{ fill: "rgba(255,255,255,0.05)" }}
+                    formatter={(v: number) => [v, "Items due"]}
+                    labelFormatter={(l: string) => l}
+                    contentStyle={{ background: "#1b1230", border: "1px solid rgba(255,255,255,0.15)" }}
+                  />
+                  <Bar dataKey="count" fill="#34d399" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="mt-2 text-xs text-white/70">Hover bars to see date & number of items that become due.</div>
           </div>
         </div>
       )}

@@ -52,6 +52,8 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
         cards: {
           orderBy: { position: "asc" },
           include: {
+            // Relation from Card -> CardSkill[]
+            // Using 'skills' as the relation field (rename if yours differs)
             skills: { include: { skill: { select: { id: true, name: true } } } }, // first only (MVP)
           },
         },
@@ -73,7 +75,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
           position: c.position,
           imageUrl: c.imageUrl,
           inheritDefault: (c as any).inheritDefault ?? true, // boolean on Card in your schema
-          skill: c.skills?.[0]?.skill?.name ?? null, // null if explicit None
+          skill: (c as any).skills?.[0]?.skill?.name ?? null, // null if explicit None
         })),
       },
       { status: 200 }
@@ -175,7 +177,8 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
             // omit => inherit; present but null/empty => explicit None; present + string => explicit skill
             const inheritDefault = !hasSkillProp;
-            const attachLabel: string | undefined = hasSkillProp && explicitSkill ? explicitSkill : undefined;
+            const attachLabel: string | undefined =
+              hasSkillProp && explicitSkill ? explicitSkill : undefined;
 
             return {
               term: String(c?.term || "").trim(),
@@ -271,7 +274,10 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
     });
     if (!set) return NextResponse.json({ error: "Not found" }, { status: 404 });
     if (set.ownerId !== ownerId) {
-      return NextResponse.json({ error: "Forbidden: ownerId does not match set owner." }, { status: 403 });
+      return NextResponse.json(
+        { error: "Forbidden: ownerId does not match set owner." },
+        { status: 403 }
+      );
     }
 
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {

@@ -1,35 +1,45 @@
 // /src/app/api/sets/[id]/item-stats/route.ts
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { DEFAULT_BKT, nextReviewDateFrom } from "@/lib/bkt";
+import {
+  DEFAULT_BKT,
+  posteriorGivenObs,
+  projectWithForgetting,
+  nextReviewDateFrom,
+} from "@/lib/bkt";
 import type { BKTParams } from "@/lib/bkt";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-const DAY = 86400000;
+const DAY = 86_400_000;
 
 type CardRow = {
   id: string;
-  term: string | null;
-  definition: string | null;
+  term: string;
   inheritDefault: boolean;
-  createdAt: Date;
   skills: { skillId: string; skill: { name: string } }[];
 };
+type SetRow = {
+  defaultSkillId: string | null;
+  cards: CardRow[];
+};
 
-export async function GET(req: Request, ctx: { params: { id: string } }) {
+function clamp01(x: number) { return Math.max(0, Math.min(1, x)); }
+
+export async function GET(req: Request, { params }: { params: { id: string } }) {
   try {
-    const setId: string = ctx.params.id;
+    const setId = params.id;
     const url = new URL(req.url);
-    const userId: string = url.searchParams.get("userId") ?? "";
+    const userId = url.searchParams.get("userId") ?? "";
 
     if (!setId || !userId) {
-      return NextResponse.json({ items: [] }, { status: 200 });
+      return NextResponse.json({ items: [] }, { status: 200, headers: { "Cache-Control": "no-store" } });
     }
 
-    const set = await prisma.studySet.findUnique({
+    // 1) Load this set's cards + skills (mapping is STRICTLY from this set)
+    const set = (await prisma.studySet.findUnique({
       where: { id: setId },
       select: {
         defaultSkillId: true,
@@ -37,109 +47,112 @@ export async function GET(req: Request, ctx: { params: { id: string } }) {
           select: {
             id: true,
             term: true,
-            definition: true,
             inheritDefault: true,
-            createdAt: true,
             skills: { select: { skillId: true, skill: { select: { name: true } } } },
           },
         },
       },
-    });
+    })) as SetRow | null;
 
-    if (!set) return NextResponse.json({ items: [] }, { status: 200 });
+    if (!set) return NextResponse.json({ items: [] }, { status: 200, headers: { "Cache-Control": "no-store" } });
 
-    let defaultSkillName: string | null = null;
-    if (set.defaultSkillId) {
-      const sk = await prisma.skill.findUnique({ where: { id: set.defaultSkillId }, select: { name: true } });
-      defaultSkillName = sk?.name ?? null;
-    }
-
-    const cards = set.cards as CardRow[];
-    const items = cards.map((c) => {
-      const explicit = c.skills[0]?.skillId ?? null;
-      const effSkillId = explicit ?? (c.inheritDefault ? set.defaultSkillId ?? null : null);
-      const effSkillName = explicit
-        ? c.skills[0]!.skill.name
-        : (c.inheritDefault ? (defaultSkillName ?? "Default Skill") : "Uncategorized");
-      return {
-        id: c.id,
-        term: c.term ?? "",
-        effSkillId,
-        effSkillName,
-        createdAt: c.createdAt,
-      };
-    });
-
-    const skillIds = Array.from(new Set(items.map(i => i.effSkillId).filter((x): x is string => !!x)));
-    const cardIds = items.map(i => i.id);
-
-    // Mastery and BKT params
-    const [cardM, skillM, paramRows] = await Promise.all([
-      prisma.userCardMastery.findMany({
-        where: { userId, cardId: { in: cardIds } },
-        select: { cardId: true, pKnow: true, updatedAt: true },
-      }),
-      prisma.userSkillMastery.findMany({
-        where: { userId, skillId: { in: skillIds } },
-        select: { skillId: true, pKnow: true, updatedAt: true },
-      }),
-      prisma.bKTParams.findMany({
-        where: { skillId: { in: skillIds } },
-        select: { skillId: true, pInit: true, pTransit: true, slip: true, guess: true, forget: true },
-      }),
-    ]);
-
-    const cardP = new Map<string, number>(cardM.map(m => [m.cardId, m.pKnow]));
-    const skillP = new Map<string, number>(skillM.map(m => [m.skillId, m.pKnow]));
-    const paramMap = new Map<string, BKTParams>(
-      paramRows.map(p => [p.skillId, { pInit: p.pInit, pTransit: p.pTransit, slip: p.slip, guess: p.guess, forget: p.forget }])
-    );
-
-    // Last seen + 7d counts per card
-    const responses = await prisma.response.findMany({
-      where: { userId, cardId: { in: cardIds } },
-      select: { cardId: true, correct: true, createdAt: true },
-      orderBy: { createdAt: "asc" },
-    });
-
-    const lastSeen = new Map<string, Date>();
-    const agg7 = new Map<string, { c: number; w: number }>();
-    const since = new Date(Date.now() - 7 * DAY);
-
-    for (const r of responses) {
-      const t = r.createdAt as unknown as Date;
-      const prev = lastSeen.get(r.cardId);
-      if (!prev || +t > +prev) lastSeen.set(r.cardId, t);
-      if (+t >= +since) {
-        const x = agg7.get(r.cardId) ?? { c: 0, w: 0 };
-        if (r.correct) x.c++; else x.w++;
-        agg7.set(r.cardId, x);
+    // Build card -> skill (first only, MVP) + names
+    const cardPrimarySkill = new Map<string, string | null>();
+    const skillName = new Map<string, string>();
+    for (const c of set.cards) {
+      if (c.skills.length) {
+        const s = c.skills[0];
+        cardPrimarySkill.set(c.id, s.skillId);
+        skillName.set(s.skillId, s.skill.name);
+      } else if (c.inheritDefault && set.defaultSkillId) {
+        cardPrimarySkill.set(c.id, set.defaultSkillId);
+      } else {
+        cardPrimarySkill.set(c.id, null);
       }
     }
 
+    const presentSkillIds = [...new Set(Array.from(cardPrimarySkill.values()).filter(Boolean))] as string[];
+
+    // 2) Fetch responses for THIS user on THIS set's cards only
+    const cardIds = set.cards.map(c => c.id);
+    const responses = await prisma.response.findMany({
+      where: { userId, cardId: { in: cardIds } },
+      orderBy: { createdAt: "asc" },
+      select: { cardId: true, createdAt: true, correct: true },
+    });
+
+    // 3) Per-card sequences (dedup by second)
+    type Ev = { correct: boolean; createdAt: Date };
+    const byCard = new Map<string, Ev[]>();
+    const seen = new Set<string>(); // `${cardId}|${tSec}`
+    for (const r of responses) {
+      const createdAt = new Date(r.createdAt as unknown as Date);
+      const key = `${r.cardId}|${Math.floor(createdAt.getTime() / 1000)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const arr = byCard.get(r.cardId) ?? [];
+      arr.push({ correct: r.correct, createdAt });
+      byCard.set(r.cardId, arr);
+    }
+
+    // 4) Skill-specific BKT params
+    const paramRows = presentSkillIds.length
+      ? await prisma.bKTParams.findMany({
+          where: { skillId: { in: presentSkillIds } },
+          select: { skillId: true, pInit: true, pTransit: true, slip: true, guess: true, forget: true },
+        })
+      : [];
+    const paramMap = new Map<string, BKTParams>(
+      paramRows.map((p) => [
+        p.skillId,
+        { pInit: p.pInit, pTransit: p.pTransit, slip: p.slip, guess: p.guess, forget: p.forget },
+      ])
+    );
+
+    // 5) Compute per-card mastery strictly from sequences (no stored fallback)
     const now = new Date();
-    const out = items.map(it => {
-      const sId = it.effSkillId;
-      const settings: BKTParams = sId ? (paramMap.get(sId) ?? DEFAULT_BKT) : DEFAULT_BKT;
-      const pKnow = cardP.get(it.id) ?? (sId ? (skillP.get(sId) ?? settings.pInit) : settings.pInit);
-      const anchor = lastSeen.get(it.id) ?? now;
-      const { next } = nextReviewDateFrom(pKnow, settings, 0.72, anchor);
-      const cw = agg7.get(it.id) ?? { c: 0, w: 0 };
+    const since = new Date(+now - 7 * DAY);
+
+    const items = set.cards.map((c) => {
+      const seq = (byCard.get(c.id) ?? []).slice().sort((a, b) => +a.createdAt - +b.createdAt);
+      const sid = cardPrimarySkill.get(c.id) ?? null;
+      const settings: BKTParams = (sid && paramMap.get(sid)) || DEFAULT_BKT;
+
+      let p = settings.pInit;
+      let lastAt: Date | null = null;
+      let c7 = 0, w7 = 0;
+
+      for (const ev of seq) {
+        if (lastAt) {
+          const gapDays = Math.max(0, Math.floor((+ev.createdAt - +lastAt) / DAY));
+          if (gapDays > 0) p = projectWithForgetting(p, gapDays, settings.forget ?? undefined);
+        }
+        p = posteriorGivenObs(p, ev.correct, settings);
+        if (ev.createdAt >= since) {
+          if (ev.correct) c7++; else w7++;
+        }
+        lastAt = ev.createdAt;
+      }
+
+      p = clamp01(p);
+      const anchor = lastAt ?? now;
+      const { next } = nextReviewDateFrom(p, settings, 0.72, anchor);
+
       return {
-        cardId: it.id,
-        term: it.term,
-        skillName: it.effSkillName ?? "Skill",
-        pKnow,
-        lastSeenAt: lastSeen.get(it.id)?.toISOString() ?? null,
+        cardId: c.id,
+        term: c.term,
+        skillName: sid ? (skillName.get(sid) ?? "Skill") : "Unassigned",
+        pKnow: p,
+        lastSeenAt: lastAt ? lastAt.toISOString() : null,
         nextReviewAt: next.toISOString(),
-        correct7: cw.c,
-        wrong7: cw.w,
+        correct7: c7,
+        wrong7: w7,
       };
     });
 
-    return NextResponse.json({ items: out }, { status: 200, headers: { "Cache-Control": "no-store" } });
+    return NextResponse.json({ items }, { status: 200, headers: { "Cache-Control": "no-store" } });
   } catch (err) {
     console.error("GET /api/sets/[id]/item-stats error:", err);
-    return NextResponse.json({ items: [] }, { status: 200 });
+    return NextResponse.json({ items: [] }, { status: 200, headers: { "Cache-Control": "no-store" } });
   }
 }
