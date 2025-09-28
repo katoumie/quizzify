@@ -94,7 +94,7 @@ html { scroll-behavior: smooth; }
 
 body {
   background: var(--bg);
-  font-family: var(--font-mona), ui-sans-serif, system-ui, sans-serif;
+  font-family: var(---mona), ui-sans-serif, system-ui, sans-serif;
 }
 
 .h1 { @apply text-3xl md:text-5xl font-extrabold tracking-tight text-ink-50; }
@@ -241,4 +241,17 @@ body {
 }
 
 
-/* Blur Text*/
+/* =========================
+   Ritasmith font (duels-only)
+   ========================= */
+
+/* Utility: use on specific elements/components */
+@utility font-ritasmith {
+  font-family: var(--font-ritasmith), ui-serif, Georgia, serif;
+}
+
+/* Optional scope class: put this on a wrapper (e.g., (game)/layout root)
+   to make Ritasmith the default font for that subtree only. */
+.duels-font {
+  font-family: var(--font-ritasmith), ui-serif, Georgia, serif;
+}
