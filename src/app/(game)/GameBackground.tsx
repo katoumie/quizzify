@@ -14,7 +14,9 @@ export default function GameBackground() {
         isRotate={false}
         mouseInteraction={false}
         pixelFilter={700}
-
+        color1="#b365d7"
+        color2="#5b6be6"
+        color3="#162325"
       />
 
     </div>

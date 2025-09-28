@@ -1,3 +1,4 @@
+// src/app/api/duels/[code]/sse/route.ts
 export const runtime = "nodejs";
 
 import { prisma } from "@/lib/prisma";

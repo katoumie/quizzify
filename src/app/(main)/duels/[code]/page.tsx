@@ -291,10 +291,11 @@ export default function Lobby() {
   };
 
   const startGame = async (force = false) => {
-    if (!session) return;
+    if (!session || !code) return;
     if (!allReady && !force) return;
     try {
-      const res = await api(`/api/duels/${session.id}/start`, {
+      // IMPORTANT: code-based start route
+      const res = await api(`/api/duels/${code}/start`, {
         method: "POST",
         body: JSON.stringify({ force: !!force }),
       });
@@ -403,7 +404,7 @@ export default function Lobby() {
                   }
                   startGame(true);
                 }}
-                className="h-9 px-3 rounded-lg bg-white/10 hover:bg.white/15 ring-1 ring-white/20 text-sm font-medium"
+                className="h-9 px-3 rounded-lg bg-white/10 hover:bg-white/15 ring-1 ring-white/20 text-sm font-medium"
                 title="Start even if not everyone is ready"
               >
                 Force Start
@@ -437,7 +438,7 @@ export default function Lobby() {
                   className="h-16 w-16 rounded-full object-cover ring-1 ring-white/15"
                 />
               ) : (
-                <div className="h-16 w-16 rounded-full bg.white/10 grid place-items-center ring-1 ring-white/10">
+                <div className="h-16 w-16 rounded-full bg-white/10 grid place-items-center ring-1 ring-white/10">
                   <span className="text-lg font-semibold">{initials(p.displayName)}</span>
                 </div>
               )}

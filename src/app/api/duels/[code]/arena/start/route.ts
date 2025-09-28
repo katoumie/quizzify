@@ -1,7 +1,7 @@
-// src/app/api/duels/[code]/start/route.ts
+// src/app/api/duels/[code]/arena/start/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { startArena } from "../arena/_helpers";
+import { startArena } from "../_helpers";
 import { duelsBus } from "@/lib/duels-bus";
 
 export const runtime = "nodejs";
@@ -21,7 +21,7 @@ export async function POST(
 
     const result = await startArena(session.id);
 
-    // Broadcast a "start" so all lobby listeners can route to /duels/[code]/arena
+    // Broadcast "start" to all clients listening in the lobby
     const payload = {
       type: "start",
       roundNo: result.roundNo,
