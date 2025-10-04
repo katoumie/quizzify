@@ -329,6 +329,11 @@ enum MatchResult {
   BYE
 }
 
+enum DuelPlayerRole {
+  PLAYER
+  SPECTATOR
+}
+
 model DuelSession {
   id                 String     @id @default(cuid())
   code               String     @unique
@@ -338,7 +343,7 @@ model DuelSession {
   set                StudySet   @relation(fields: [setId], references: [id], onDelete: Cascade)
   mode               DuelMode
   status             DuelStatus @default(LOBBY)
-  options            Json       @default("{}") // {timerMin, finite:boolean, shuffle:boolean, direction:"term|def|mixed"}
+  options            Json       @default("{}") // {timerMin, finite, shuffle, direction:"term|def|mixed"}
   initialPlayerCount Int        @default(0)
   createdAt          DateTime   @default(now())
   startedAt          DateTime?
@@ -346,6 +351,9 @@ model DuelSession {
 
   players DuelPlayer[]
   rounds  DuelRound[]
+
+  @@index([hostId, createdAt])
+  @@index([setId, createdAt])
 }
 
 model DuelPlayer {
@@ -354,20 +362,27 @@ model DuelPlayer {
   session      DuelSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   userId       String?
   user         User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+
   displayName  String
-  team         String? // "A" | "B" | null
-  lives        Int         @default(3)
-  score        Int         @default(0)
-  isReady      Boolean     @default(false)
-  connectedAt  DateTime    @default(now())
+  role         DuelPlayerRole @default(PLAYER) // PLAYER or SPECTATOR (teachers, eliminated, etc.)
+
+  // Optional / legacy fields (kept to avoid breaking UI; safe to remove later if unused)
+  team         String?         // "A" | "B" | null (unused in Arena)
+  lives        Int             @default(3)
+  score        Int             @default(0)
+  isReady      Boolean         @default(false)
+  connectedAt  DateTime        @default(now())
   lastSeenAt   DateTime?
   eliminatedAt DateTime?
-  byeCount     Int         @default(0)
+  byeCount     Int             @default(0)
 
   // Back-refs
-  answers     DuelAnswer[]
-  matchupsAsA DuelMatchup[] @relation("MatchupA")
-  matchupsAsB DuelMatchup[] @relation("MatchupB")
+  answers   DuelAnswer[]
+  pairsAsA  DuelPair[] @relation("PairA")
+  pairsAsB  DuelPair[] @relation("PairB")
+
+  @@index([sessionId, role])
+  @@index([userId])
 }
 
 model DuelRound {
@@ -375,29 +390,39 @@ model DuelRound {
   sessionId      String
   session        DuelSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   roundNo        Int
-  questionCardId String // references Card.id (string)
+  questionCardId String      // references Card.id (string)
   timerSec       Int
   state          RoundState  @default(PENDING)
   startedAt      DateTime?
   endedAt        DateTime?
 
-  matchups DuelMatchup[]
-  answers  DuelAnswer[]
+  pairs   DuelPair[]
+  answers DuelAnswer[]
 
   @@unique([sessionId, roundNo])
+  @@index([sessionId, state])
 }
 
-model DuelMatchup {
+model DuelPair {
   id      String    @id @default(cuid())
   roundId String
   round   DuelRound @relation(fields: [roundId], references: [id], onDelete: Cascade)
 
   aId String
-  a   DuelPlayer @relation("MatchupA", fields: [aId], references: [id], onDelete: Cascade)
-  bId String
-  b   DuelPlayer @relation("MatchupB", fields: [bId], references: [id], onDelete: Cascade)
+  a   DuelPlayer @relation("PairA", fields: [aId], references: [id], onDelete: Cascade)
 
+  bId String?     // null => BYE
+  b   DuelPlayer? @relation("PairB", fields: [bId], references: [id], onDelete: SetNull)
+
+  bye    Boolean     @default(false)
   result MatchResult?
+
+  // Optional: store winner directly (useful for analytics/UI)
+  winnerId String?
+
+  @@index([roundId])
+  @@index([aId])
+  @@index([bId])
 }
 
 model DuelAnswer {
@@ -411,4 +436,7 @@ model DuelAnswer {
   isCorrect   Boolean
   responseMs  Int
   createdAt   DateTime @default(now())
+
+  @@index([roundId, playerId])
+  @@index([createdAt])
 }

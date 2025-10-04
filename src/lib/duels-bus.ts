@@ -23,11 +23,7 @@ class DuelsBus {
     const set = this.subs.get(code);
     if (!set) return;
     for (const fn of Array.from(set)) {
-      try {
-        fn(msg);
-      } catch {
-        // ignore subscriber errors
-      }
+      try { fn(msg); } catch { /* ignore */ }
     }
   }
 }
@@ -35,4 +31,3 @@ class DuelsBus {
 // persist across HMR / dev server reloads
 export const duelsBus: DuelsBus =
   (globalThis as any).__DUELS_BUS__ || ((globalThis as any).__DUELS_BUS__ = new DuelsBus());
-

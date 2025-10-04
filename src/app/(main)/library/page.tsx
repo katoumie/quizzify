@@ -280,6 +280,7 @@ export default function LibraryPage() {
       return;
     }
 
+    // (Learn removed from UI; keep handler as no-op path)
     if (mode === "learn") {
       const url = `/sets/${studyTarget.id}/learn`;
       closeStudy();
@@ -287,7 +288,7 @@ export default function LibraryPage() {
       return;
     }
 
-    // NEW: Duels → create lobby then navigate to /duels/[code]
+    // Duels → create lobby then navigate to /duels/[code]
     if (mode === "duels") {
       try {
         const res = await fetch(`/api/duels`, {
@@ -295,9 +296,9 @@ export default function LibraryPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             setId: studyTarget.id,
-            mode: opts?.duelsMode ?? "ARENA", // <- pass chosen mode
+            mode: (opts?.duelsMode ?? "ARENA"), // always ARENA from UI now
             options: {},
-            hostId: ownerId ?? undefined,     // if available, use as host
+            hostId: ownerId ?? undefined,
           }),
         });
         const js = await res.json().catch(() => ({} as any));
@@ -848,7 +849,7 @@ function SplitPill({
   );
 }
 
-/* ===== Study Modal (with Flashcards + Duels settings steps) ===== */
+/* ===== Study Modal (Flashcards + Duels with only Arena) ===== */
 function StudyModal({
   open,
   title,
@@ -864,7 +865,7 @@ function StudyModal({
     scope?: "all" | "recommended";
     shuffle?: boolean;
     untimed?: boolean;
-    duelsMode?: "ARENA" | "TEAM" | "STANDARD"; // <- NEW
+    duelsMode?: "ARENA" | "TEAM" | "STANDARD"; // keep types for compatibility
   }) => void;
 }) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -872,7 +873,7 @@ function StudyModal({
   // Steps
   const [step, setStep] = useState<"choose" | "flashcards" | "duels">("choose");
 
-  // NEW: Duels mode picker
+  // Duels mode picker (only ARENA is shown)
   const [duelsMode, setDuelsMode] = useState<"ARENA" | "TEAM" | "STANDARD">("ARENA");
 
   // Flashcards options
@@ -966,7 +967,7 @@ function StudyModal({
                     ? `How do you want to study${title ? `: ${title}` : ""}?`
                     : step === "flashcards"
                     ? "Flashcards • Quick settings"
-                    : "Duels • Choose mode"}
+                    : "Duels • Arena mode"}
                 </div>
               </div>
               <button type="button" onClick={onClose} className="grid h-8 w-8 place-items-center rounded-md text-white/70 hover:text-white hover:bg-white/10" aria-label="Close">
@@ -977,10 +978,10 @@ function StudyModal({
             <div className="mt-3 border-t border-white/10" />
 
             {step === "choose" ? (
-              <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2">
-                <Tile id="study-learn" label="Learn" sub="Guided practice" icon="/icons/learn.svg" onClick={() => onPick("learn")} />
+              // Removed "Learn" tile; now just Flashcards and Duels
+              <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <Tile id="study-flashcards" label="Flashcards" sub="Classic cards" icon="/icons/flashcards.svg" onClick={() => setStep("flashcards")} />
-                <Tile id="study-duels" label="Duels" sub="Challenge mode" icon="/icons/duels.svg" onClick={() => setStep("duels")} />
+                <Tile id="study-duels" label="Duels" sub="Arena mode" icon="/icons/duels.svg" onClick={() => setStep("duels")} />
               </div>
             ) : step === "flashcards" ? (
               <div className="mt-3 space-y-3">
@@ -1050,13 +1051,13 @@ function StudyModal({
                 </div>
               </div>
             ) : (
-              // --- NEW: Duels settings step ---
+              // --- Duels: ONLY Arena ---
               <div className="mt-3 space-y-3">
                 <div className="grid gap-2">
                   <label
                     className={[
-                      "flex items-center justify-between rounded-[10px] p-3 ring-1 transition cursor-pointer",
-                      duelsMode === "ARENA" ? "bg-white/5 ring-white/30" : "ring-white/12 hover:bg-white/5",
+                      "flex items-center justify-between rounded-[10px] p-3 ring-1 transition",
+                      "bg-white/5 ring-white/30",
                       "text-white/90",
                     ].join(" ")}
                   >
@@ -1068,45 +1069,7 @@ function StudyModal({
                       type="radio"
                       name="duels-mode"
                       checked={duelsMode === "ARENA"}
-                      onChange={() => setDuelsMode("ARENA")}
-                    />
-                  </label>
-
-                  <label
-                    className={[
-                      "flex items-center justify-between rounded-[10px] p-3 ring-1 transition cursor-pointer",
-                      duelsMode === "TEAM" ? "bg-white/5 ring-white/30" : "ring-white/12 hover:bg-white/5",
-                      "text-white/90",
-                    ].join(" ")}
-                  >
-                    <div>
-                      <div className="text-[14px] font-semibold">Team</div>
-                      <div className="text-[12px] text-white/70">Two teams compete; faster correct answers score more.</div>
-                    </div>
-                    <input
-                      type="radio"
-                      name="duels-mode"
-                      checked={duelsMode === "TEAM"}
-                      onChange={() => setDuelsMode("TEAM")}
-                    />
-                  </label>
-
-                  <label
-                    className={[
-                      "flex items-center justify-between rounded-[10px] p-3 ring-1 transition cursor-pointer",
-                      duelsMode === "STANDARD" ? "bg-white/5 ring-white/30" : "ring-white/12 hover:bg-white/5",
-                      "text-white/90",
-                    ].join(" ")}
-                  >
-                    <div>
-                      <div className="text-[14px] font-semibold">Standard (FFA)</div>
-                      <div className="text-[12px] text-white/70">Everyone answers; fastest correct gets most points.</div>
-                    </div>
-                    <input
-                      type="radio"
-                      name="duels-mode"
-                      checked={duelsMode === "STANDARD"}
-                      onChange={() => setDuelsMode("STANDARD")}
+                      readOnly
                     />
                   </label>
                 </div>
@@ -1121,7 +1084,7 @@ function StudyModal({
                   </button>
                   <button
                     type="button"
-                    onClick={() => onPick("duels", { duelsMode })}
+                    onClick={() => onPick("duels", { duelsMode: "ARENA" })}
                     className={[
                       "inline-flex items-center gap-1.5 rounded-[6px]",
                       "h-8 px-2.5",

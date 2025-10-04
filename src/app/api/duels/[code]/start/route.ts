@@ -1,49 +1,23 @@
 // src/app/api/duels/[code]/start/route.ts
-import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
-import { startArena } from "../arena/_helpers";
-import { duelsBus } from "@/lib/duels-bus";
-
 export const runtime = "nodejs";
 
-export async function POST(
-  _req: NextRequest,
-  { params }: { params: { code: string } }
-) {
-  try {
-    const session = await prisma.duelSession.findUnique({
-      where: { code: params.code },
-      select: { id: true, code: true },
-    });
-    if (!session) {
-      return NextResponse.json({ error: "Session not found." }, { status: 404 });
-    }
+import { NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { duelsBus } from "@/lib/duels-bus";
 
-    const result = await startArena(session.id);
+export async function POST(_req: Request, ctx: { params: Promise<{ code: string }> }) {
+  const { code } = await ctx.params;
 
-    // Broadcast a "start" so all lobby listeners can route to /duels/[code]/arena
-    const payload = {
-      type: "start",
-      roundNo: result.roundNo,
-      roundId: result.roundId,
-      questionCardId: result.questionCardId,
-    };
-    duelsBus.publish(session.id, payload);
-    duelsBus.publish(session.code, payload);
+  const sess =
+    (await prisma.duelSession.findUnique({ where: { code }, select: { id: true, code: true } })) ??
+    (await prisma.duelSession.findUnique({ where: { id: code }, select: { id: true, code: true } }));
 
-    return NextResponse.json({
-      ok: true,
-      sessionId: session.id,
-      roundNo: result.roundNo,
-      roundId: result.roundId,
-      state: "PAIRING",
-      pairs: result.pairs,
-      questionCardId: result.questionCardId,
-    });
-  } catch (err: any) {
-    return NextResponse.json(
-      { error: err?.message ?? "Failed to start Arena." },
-      { status: 400 }
-    );
-  }
+  if (!sess) return NextResponse.json({ error: "Session not found" }, { status: 404 });
+
+  // Broadcast a simple redirect signal understood by the lobby page
+  const payload = { type: "go-arena" as const };
+  duelsBus.publish(sess.id, payload);
+  duelsBus.publish(sess.code, payload);
+
+  return NextResponse.json({ ok: true });
 }

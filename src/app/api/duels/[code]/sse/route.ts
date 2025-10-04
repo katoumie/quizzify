@@ -8,104 +8,124 @@ function sse(obj: any) {
   return `data: ${JSON.stringify(obj)}\n\n`;
 }
 
-export async function GET(_req: Request, ctx: { params: Promise<{ code: string }> }) {
-  const { code } = await ctx.params;
+export async function GET(_req: Request, ctx: { params: { code: string } }) {
+  const { code } = ctx.params;
 
-  // Resolve session by code once so we can subscribe by both id & code
-  const base = await prisma.duelSession.findUnique({
+  // Find session by lobby code (not ID)
+  const session = await prisma.duelSession.findUnique({
     where: { code },
-    select: { id: true, code: true },
+    select: {
+      id: true,
+      code: true,
+      status: true,
+      hostId: true,
+      setId: true,
+      players: {
+        select: {
+          id: true,
+          displayName: true,
+          isReady: true,
+          lives: true,
+          role: true,
+          user: { select: { username: true, avatar: true } },
+        },
+        orderBy: { connectedAt: "asc" },
+      },
+    },
   });
-  if (!base) {
-    return new Response("Not found", { status: 404 });
-  }
+
+  if (!session) return new Response("Not found", { status: 404 });
+
+  // Capture non-null primitives for use inside the stream closure
+  const sessionId = session.id;
+  const sessionCode = session.code;
 
   const stream = new ReadableStream({
     start(controller) {
       let closed = false;
       const enc = new TextEncoder();
-
       const send = (obj: any) => {
-        if (closed) return;
-        try {
-          controller.enqueue(enc.encode(sse(obj)));
-        } catch {
-          // ignore enqueue when closed
+        if (!closed) {
+          try {
+            controller.enqueue(enc.encode(sse(obj)));
+          } catch {}
         }
       };
 
-      const sendSnapshot = async () => {
-        if (closed) return;
+      async function sendSnapshot() {
         try {
           const snap = await prisma.duelSession.findUnique({
-            where: { id: base.id },
+            where: { id: sessionId },
             select: {
               id: true,
               code: true,
-              hostId: true,
-              mode: true,
               status: true,
-              options: true,
+              hostId: true,
               players: {
                 select: {
                   id: true,
-                  userId: true,
                   displayName: true,
-                  team: true,
-                  lives: true,
-                  score: true,
                   isReady: true,
-                  eliminatedAt: true,
-                  user: { select: { avatar: true, username: true } },
+                  lives: true,
+                  role: true,
+                  user: { select: { username: true, avatar: true } },
                 },
                 orderBy: { connectedAt: "asc" },
               },
             },
           });
-          if (snap) send({ type: "snapshot", payload: snap });
-        } catch {
-          // ignore transient DB errors
-        }
-      };
+
+          if (!snap) return;
+
+          send({
+            type: "snapshot",
+            payload: {
+              id: snap.id,
+              code: snap.code,
+              status: snap.status,
+              hostId: snap.hostId,
+              players: snap.players.map((p) => ({
+                id: p.id,
+                name: p.displayName || p.user?.username || "Player",
+                avatar: p.user?.avatar ?? null,
+                isReady: !!p.isReady,
+                lives: p.lives ?? 3,
+                role: p.role ?? "PLAYER",
+              })),
+            },
+          });
+        } catch {}
+      }
 
       // Initial snapshot
       sendSnapshot();
 
-      // Subscribe to BOTH keys (defensive against dev/HMR/runtime splits)
-      const unsubId = duelsBus.subscribe(base.id, (msg) => send(msg));
-      const unsubCode = duelsBus.subscribe(base.code, (msg) => send(msg));
+      // Relay bus messages
+      const unsubId = duelsBus.subscribe(sessionId, (msg) => send(msg));
+      const unsubCode = duelsBus.subscribe(sessionCode, (msg) => send(msg));
 
       // Keep-alive
       const keep = setInterval(() => {
-        if (closed) return;
-        try {
-          controller.enqueue(enc.encode(": keep-alive\n\n"));
-        } catch {}
+        if (!closed) {
+          try {
+            controller.enqueue(enc.encode(": keep-alive\n\n"));
+          } catch {}
+        }
       }, 15000);
 
-      // Cleanup
       const close = () => {
         if (closed) return;
         closed = true;
         clearInterval(keep);
-        try {
-          unsubId?.();
-        } catch {}
-        try {
-          unsubCode?.();
-        } catch {}
-        try {
-          controller.close();
-        } catch {}
+        try { unsubId?.(); } catch {}
+        try { unsubCode?.(); } catch {}
+        try { controller.close(); } catch {}
       };
 
-      // @ts-ignore expose closer for cancel()
-      controller._close = close;
+      (controller as any)._close = close;
     },
-
     cancel() {
-      // @ts-ignore
-      if (typeof this._close === "function") this._close();
+      try { (this as any)._close?.(); } catch {}
     },
   });
 
