@@ -1,68 +1,26 @@
 // /src/app/library/page.tsx
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { Dispatch, SetStateAction } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { SetCardData } from "@/components/SetCard";
 import { useRouter, useSearchParams } from "next/navigation";
 import { INPUT_BG } from "@/components/set-form/constants";
 
-const SESSION_KEY = "qz_auth";
+import {
+  SESSION_KEY,
+  unlikeSetForUser,
+  fmtRel,
+  type FilterKey,
+  type OrderKey,
+  type FolderLite,
+} from "@/components/library/utils";
 
-// Visibility/liked filter (UI label: "Filter")
-type FilterKey = "all" | "public" | "private" | "friends" | "liked";
-// Sort order (UI label: "Sort")
-type OrderKey = "updated" | "likes" | "name";
-
-type FolderLite = { id: string; name: string; createdAt: string; _count: { sets: number } };
-
-/* ──────────────────────────────────────────────────────────────────────────
-   Helper: persist unlike on the backend and keep local lists in sync
-────────────────────────────────────────────────────────────────────────── */
-async function unlikeSetForUser(
-  setId: string,
-  userId: string,
-  update: {
-    setLikedSets: Dispatch<SetStateAction<SetCardData[]>>;
-    setRecentSets: Dispatch<SetStateAction<SetCardData[]>>;
-  }
-) {
-  // Try JSON body first (common pattern in this app)
-  let res = await fetch(`/api/sets/${encodeURIComponent(setId)}/like`, {
-    method: "DELETE",
-    headers: { "Content-Type": "application/json" },
-    credentials: "same-origin",
-    // include both userId and ownerId for maximum compatibility with your routes
-    body: JSON.stringify({ userId, ownerId: userId }),
-  });
-
-  // Fallback to query-string if needed
-  if (!res.ok) {
-    res = await fetch(
-      `/api/sets/${encodeURIComponent(setId)}/like?userId=${encodeURIComponent(userId)}`,
-      { method: "DELETE", credentials: "same-origin" }
-    );
-  }
-
-  let js: any = {};
-  try {
-    js = await res.json();
-  } catch {
-    // ignore JSON parse errors
-  }
-
-  if (!res.ok) {
-    throw new Error(js?.error || "Failed to unlike.");
-  }
-
-  // Success → remove from likedSets and decrement likeCount in recentSets
-  update.setLikedSets((r) => r.filter((x) => x.id !== setId));
-  update.setRecentSets((r) =>
-    r.map((x) =>
-      x.id === setId ? { ...x, likeCount: Math.max(0, (x.likeCount ?? 0) - 1) } : x
-    )
-  );
-}
+import { StaticSelect } from "@/components/library/StaticSelect";
+import { VisibilityChip } from "@/components/library/VisibilityChip";
+import { TermsChip } from "@/components/library/TermsChip";
+import { LikesPill } from "@/components/library/LikesPill";
+import { SplitPill } from "@/components/library/SplitPill";
+import { StudyModal } from "@/components/library/StudyModal";
 
 export default function LibraryPage() {
   const router = useRouter();
@@ -78,7 +36,7 @@ export default function LibraryPage() {
 
   const [query, setQuery] = useState("");
 
-  // NEW: study modal state
+  // Study modal state
   const [studyOpen, setStudyOpen] = useState(false);
   const [studyTarget, setStudyTarget] = useState<{ id: string; title: string } | null>(null);
 
@@ -218,31 +176,16 @@ export default function LibraryPage() {
     return list;
   }, [searched, order]);
 
-  // Real-time helper
-  const fmtRel = (iso: string) => {
-    const d = new Date(iso);
-    const diff = Date.now() - d.getTime();
-    const min = Math.floor(diff / 60000);
-    const hr = Math.floor(min / 60);
-    const day = Math.floor(hr / 24);
-    if (day > 30) return d.toLocaleDateString();
-    if (day >= 1) return `${day}d ago`;
-    if (hr >= 1) return `${hr}h ago`;
-    if (min >= 1) return `${min}m ago`;
-    return `just now`;
-  };
-
-  // Labels for status row
+  // Labels & counts
   const filterLabel = filter === "friends" ? "friends only" : filter;
   const orderLabel = order === "updated" ? "last updated" : order === "likes" ? "likes" : "name";
-
   const resultCount = finalSets.length;
   const resultWord = resultCount === 1 ? "result" : "results";
 
   // Fast lookup for "is liked"
   const likedIdSet = useMemo(() => new Set(likedSets.map((x) => x.id)), [likedSets]);
 
-  // helpers for study modal
+  // Study modal helpers
   const openStudy = (id: string, title: string) => {
     setStudyTarget({ id, title });
     setStudyOpen(true);
@@ -280,7 +223,7 @@ export default function LibraryPage() {
       return;
     }
 
-    // (Learn removed from UI; keep handler as no-op path)
+    // (Learn kept for forward compatibility — currently not shown in UI)
     if (mode === "learn") {
       const url = `/sets/${studyTarget.id}/learn`;
       closeStudy();
@@ -288,7 +231,6 @@ export default function LibraryPage() {
       return;
     }
 
-    // Duels → create lobby then navigate to /duels/[code]
     if (mode === "duels") {
       try {
         const res = await fetch(`/api/duels`, {
@@ -296,7 +238,7 @@ export default function LibraryPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             setId: studyTarget.id,
-            mode: (opts?.duelsMode ?? "ARENA"), // always ARENA from UI now
+            mode: (opts?.duelsMode ?? "ARENA"),
             options: {},
             hostId: ownerId ?? undefined,
           }),
@@ -512,7 +454,6 @@ export default function LibraryPage() {
 
                       {/* RIGHT */}
                       <div className="flex min-w-[144px] flex-col items-end gap-2">
-                        {/* Split pill always visible (Study left; caret shows only if owner/liked) */}
                         <SplitPill
                           isOwner={isOwner}
                           isLiked={isLiked}
@@ -602,509 +543,5 @@ export default function LibraryPage() {
         onPick={onPickStudy}
       />
     </>
-  );
-}
-
-/* ===== Static trigger select (compact, no icon, label never changes) ===== */
-function StaticSelect({
-  label,
-  value,
-  onChange,
-  options,
-  size = "sm",
-}: {
-  label: string; // visible text on the trigger (static)
-  value: string;
-  onChange: (v: string) => void;
-  options: Array<{ value: string; label: string }>;
-  size?: "sm" | "md";
-}) {
-  const [open, setOpen] = useState(false);
-  const btnRef = useRef<HTMLButtonElement | null>(null);
-  const menuRef = useRef<HTMLDivElement | null>(null);
-
-  const h = size === "sm" ? "h-7" : "h-8";
-  const px = size === "sm" ? "px-2" : "px-2.5";
-  const text = size === "sm" ? "text-[12px]" : "text-[13px]";
-  const itemText = size === "sm" ? "text-[12px]" : "text-[13px]";
-  const caretSize = size === "sm" ? "h-3.5 w-3.5" : "h-4 w-4";
-  const itemPad = size === "sm" ? "px-2.5 py-1" : "px-3 py-1.5";
-  const menuW = size === "sm" ? "w-40" : "w-44";
-
-  // close on outside click / Esc
-  useEffect(() => {
-    function onDocClick(e: MouseEvent) {
-      const t = e.target as Node;
-      if (menuRef.current?.contains(t) || btnRef.current?.contains(t)) return;
-      setOpen(false);
-    }
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setOpen(false);
-    }
-    document.addEventListener("mousedown", onDocClick);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDocClick);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, []);
-
-  return (
-    <div className="relative">
-      {/* Static trigger: label + caret only */}
-      <button
-        ref={btnRef}
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className={[
-          "inline-flex items-center gap-1.5 rounded-[6px]",
-          h, px, text,
-          "text-white/90 hover:text-white",
-          "ring-1 ring-white/20 hover:ring-white/10",
-          "transition-colors bg-white/5",
-          "focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)] focus-visible:ring-offset-2",
-        ].join(" ")}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-label={label}
-      >
-        <span className="leading-none">{label}</span>
-        <svg
-          className={`-mr-0.5 ${caretSize} opacity-80 transition-transform ${open ? "rotate-180" : ""}`}
-          viewBox="0 0 20 20"
-          fill="currentColor"
-          aria-hidden="true"
-        >
-          <path d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z" />
-        </svg>
-      </button>
-
-      {/* Custom dropdown menu */}
-      {open && (
-        <div
-          ref={menuRef}
-          role="menu"
-          className={[
-            "absolute left-0 z-40 mt-1 overflow-hidden rounded-md bg-[#18062e] shadow-lg ring-1 ring-white/20",
-            menuW,
-          ].join(" ")}
-        >
-          <div className="py-1">
-            {options.map((o) => {
-              const active = String(value) === String(o.value);
-              return (
-                <button
-                  key={o.value}
-                  role="menuitem"
-                  onClick={() => {
-                    onChange(o.value);
-                    setOpen(false);
-                  }}
-                  className={[
-                    "block w-full text-left text-white",
-                    itemText, itemPad,
-                    active ? "bg-white/10" : "hover:bg-white/10",
-                  ].join(" ")}
-                >
-                  {o.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ===== Small helpers ===== */
-function VisibilityChip({ isPublic, visibility }: { isPublic: boolean; visibility?: string }) {
-  // Unified appearance for all states (match "Private" style)
-  const label = isPublic ? "Public" : visibility === "friends" ? "Friends" : "Private";
-  const cls = "bg-white/[0.06] ring-white/10 text-white/80";
-  return (
-    <span className={["inline-flex items-center rounded-md px-2 py-0.5 text-[11px] ring-1", cls].join(" ")}>
-      {label}
-    </span>
-  );
-}
-
-function TermsChip({ count }: { count: number }) {
-  const cls = "bg-white/[0.06] ring-white/10 text-white/80";
-  return (
-    <span className={["inline-flex items-center rounded-md px-2 py-0.5 text-[11px] ring-1", cls].join(" ")}>
-      {count} {count === 1 ? "term" : "terms"}
-    </span>
-  );
-}
-
-function LikesPill({ count }: { count: number }) {
-  const cls = "bg-white/[0.06] ring-white/10 text-white/80";
-  return (
-    <span className={["inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] ring-1", cls].join(" ")}>
-      <img src="/icons/like.svg" alt="" className="h-[12px] w-[12px]" />
-      {count}
-    </span>
-  );
-}
-
-function SplitPill({
-  isOwner,
-  isLiked,
-  onStudy,
-  onDelete,
-  onUnlike,
-  onViewStats,
-}: {
-  isOwner: boolean;
-  isLiked: boolean;
-  onStudy: () => void;
-  onDelete: () => Promise<void> | void;
-  onUnlike: () => Promise<void> | void;
-  onViewStats?: () => void; // <-- add this
-}) {
-  const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    function onDoc(e: MouseEvent) {
-      if (!wrapRef.current) return;
-      if (!wrapRef.current.contains(e.target as Node)) setOpen(false);
-    }
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setOpen(false);
-    }
-    document.addEventListener("mousedown", onDoc);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDoc);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, []);
-
-  const showCaret = isOwner || isLiked; // caret only needed for Delete/Unlike
-
-  return (
-    <div ref={wrapRef} className="relative">
-      {/* Horizontal split pill */}
-      <div className="inline-flex h-7 w-25 items-stretch overflow-hidden rounded-[6px] bg-white/5 ring-1 ring-white/20">
-        {/* Left 3/4: Study (clickable) */}
-        <button
-          onClick={onStudy}
-          className="flex flex-[3] items-center justify-center px-2 text-[12px] text-white/90 hover:text-white"
-          aria-label="Study"
-        >
-          <span>Study</span>
-        </button>
-
-        {/* Vertical separator */}
-        <div className="w-px bg-white/15" aria-hidden="true" />
-
-        {/* Right 1/4 caret segment */}
-        {showCaret ? (
-          <button
-            onClick={() => setOpen((v) => !v)}
-            aria-label="More actions"
-            className="flex flex-[1] items-center justify-center text-white/80 hover:bg-white/10"
-          >
-            <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-              <path d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z" />
-            </svg>
-          </button>
-        ) : (
-          <span className="flex flex-[1]" />
-        )}
-      </div>
-
-      {/* Dropdown */}
-      {open && (
-        <div className="absolute right-0 z-40 mt-1 w-36 overflow-hidden rounded-md bg-[#18062e] py-1 text-[12px] shadow-lg ring-1 ring-white/20">
-          {/* NEW: always available */}
-          <button
-            className="block w-full px-3 py-1.5 text-left text-white hover:bg-white/10"
-            onClick={() => { setOpen(false); onViewStats?.(); }}
-          >
-            View set statistics
-          </button>
-
-          {isOwner && (
-            <button
-              className="block w-full px-3 py-1.5 text-left text-white hover:bg-white/10"
-              onClick={async () => { setOpen(false); await onDelete(); }}
-            >
-              Delete
-            </button>
-          )}
-          {isLiked && !isOwner && (
-            <button
-              className="block w-full px-3 py-1.5 text-left text-white hover:bg-white/10"
-              onClick={async () => { setOpen(false); await onUnlike(); }}
-            >
-              Unlike
-            </button>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ===== Study Modal (Flashcards + Duels with only Arena) ===== */
-function StudyModal({
-  open,
-  title,
-  onClose,
-  onPick,
-}: {
-  open: boolean;
-  title: string;
-  onClose: () => void;
-  onPick: (mode: "learn" | "flashcards" | "duels", opts?: {
-    difficulty?: "easy" | "medium" | "hard";
-    mute?: boolean;
-    scope?: "all" | "recommended";
-    shuffle?: boolean;
-    untimed?: boolean;
-    duelsMode?: "ARENA" | "TEAM" | "STANDARD"; // keep types for compatibility
-  }) => void;
-}) {
-  const wrapRef = useRef<HTMLDivElement | null>(null);
-
-  // Steps
-  const [step, setStep] = useState<"choose" | "flashcards" | "duels">("choose");
-
-  // Duels mode picker (only ARENA is shown)
-  const [duelsMode, setDuelsMode] = useState<"ARENA" | "TEAM" | "STANDARD">("ARENA");
-
-  // Flashcards options
-  const [difficulty, setDifficulty] = useState<"easy" | "medium" | "hard">("easy");
-  const [mute, setMute] = useState<boolean>(false);
-  const [scope, setScope] = useState<"all" | "recommended">("all");
-  const [shuffle, setShuffle] = useState<boolean>(false);
-  const [untimed, setUntimed] = useState<boolean>(false);
-
-  useEffect(() => {
-    if (open) {
-      setStep("choose");
-      setDifficulty("easy");
-      setMute(false);
-      setScope("all");
-      setShuffle(false);
-      setUntimed(false);
-      setDuelsMode("ARENA"); // reset duels mode
-    }
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    const onMouseDown = (e: MouseEvent) => { if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) onClose(); };
-    document.addEventListener("keydown", onKey);
-    document.addEventListener("mousedown", onMouseDown);
-    return () => {
-      document.removeEventListener("keydown", onKey);
-      document.removeEventListener("mousedown", onMouseDown);
-    };
-  }, [open, onClose]);
-
-  const Tile = ({ id, label, sub, icon, onClick }: { id: string; label: string; sub: string; icon: string; onClick: () => void }) => (
-    <button
-      type="button"
-      onClick={onClick}
-      id={id}
-      className={[
-        "flex min-h[96px] flex-1 min-w-[160px] rounded-[10px] p-3",
-        "flex-col items-center justify-center text-center",
-        "ring-1 transition",
-        "ring-white/12 hover:bg-white/5",
-        "text-white/90 hover:text-white",
-      ].join(" ")}
-    >
-      <img src={icon} alt="" className="h-5 w-5 opacity-90" />
-      <div className="mt-1 text-[15px] font-semibold">{label}</div>
-      <div className="mt-0.5 text-[12px] text-white/70">{sub}</div>
-    </button>
-  );
-
-  const DiffRadio = ({ v, label, desc }: { v: "easy" | "medium" | "hard"; label: string; desc: string }) => {
-    const active = difficulty === v;
-    return (
-      <label
-        className={[
-          "flex items-start gap-3 rounded-[10px] p-3 ring-1 transition cursor-pointer",
-          active ? "bg-white/5 ring-white/30" : "ring-white/12 hover:bg-white/5",
-          "text-white/90",
-        ].join(" ")}
-      >
-        <input type="radio" name="flash-diff" className="mt-0.5" checked={active} onChange={() => setDifficulty(v)} />
-        <div>
-          <div className="text-[14px] font-semibold">{label}</div>
-          <div className="text-[12px] text-white/70">{desc}</div>
-        </div>
-      </label>
-    );
-  };
-
-  return (
-    <div className={`fixed inset-0 z-[120] ${open ? "" : "pointer-events-none"}`} aria-hidden={!open} role="dialog" aria-modal="true">
-      <div className={`absolute inset-0 ${open ? "opacity-100" : "opacity-0"} transition-opacity bg-black/50`} />
-      <div className="absolute inset-0 grid place-items-center p-4">
-        <div
-          ref={wrapRef}
-          className={[
-            "w-[min(640px,96vw)] rounded-xl",
-            "bg-[var(--bg,#18062e)] ring-1 ring-white/15 shadow-xl",
-            open ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-1",
-            "transition-all",
-          ].join(" ")}
-        >
-          <div className="p-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-white">
-                <img src="/icons/wand.svg" alt="" className="h-[16px] w-[16px]" aria-hidden="true" />
-                <div className="text-[15px] font-medium">
-                  {step === "choose"
-                    ? `How do you want to study${title ? `: ${title}` : ""}?`
-                    : step === "flashcards"
-                    ? "Flashcards • Quick settings"
-                    : "Duels • Arena mode"}
-                </div>
-              </div>
-              <button type="button" onClick={onClose} className="grid h-8 w-8 place-items-center rounded-md text-white/70 hover:text-white hover:bg-white/10" aria-label="Close">
-                <img src="/icons/close.svg" alt="" className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="mt-3 border-t border-white/10" />
-
-            {step === "choose" ? (
-              // Removed "Learn" tile; now just Flashcards and Duels
-              <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <Tile id="study-flashcards" label="Flashcards" sub="Classic cards" icon="/icons/flashcards.svg" onClick={() => setStep("flashcards")} />
-                <Tile id="study-duels" label="Duels" sub="Arena mode" icon="/icons/duels.svg" onClick={() => setStep("duels")} />
-              </div>
-            ) : step === "flashcards" ? (
-              <div className="mt-3 space-y-3">
-                {/* Difficulty radios */}
-                <div className="grid gap-2">
-                  <DiffRadio v="easy" label="Easy" desc="Gentle pace, more time per card." />
-                  <DiffRadio v="medium" label="Medium" desc="Balanced challenge and reinforcement." />
-                  <DiffRadio v="hard" label="Hard" desc="Faster pace, stricter timing." />
-                </div>
-
-                {/* Scope (recommended vs all) */}
-                <div className="grid sm:grid-cols-2 gap-2">
-                  <label className={`flex items-start gap-3 rounded-[10px] p-3 ring-1 transition cursor-pointer ${scope === "all" ? "bg-white/5 ring-white/30" : "ring-white/12 hover:bg-white/5"} text-white/90`}>
-                    <input type="radio" name="scope" className="mt-0.5" checked={scope === "all"} onChange={() => setScope("all")} />
-                    <div>
-                      <div className="text-[14px] font-semibold">Review all items</div>
-                      <div className="text-[12px] text-white/70">Go through the whole set.</div>
-                    </div>
-                  </label>
-                  <label className={`flex items-start gap-3 rounded-[10px] p-3 ring-1 transition cursor-pointer ${scope === "recommended" ? "bg-white/5 ring-white/30" : "ring-white/12 hover:bg-white/5"} text-white/90`}>
-                    <input type="radio" name="scope" className="mt-0.5" checked={scope === "recommended"} onChange={() => setScope("recommended")} />
-                    <div>
-                      <div className="text-[14px] font-semibold">Recommended only</div>
-                      <div className="text-[12px] text-white/70">Due now by your mastery schedule.</div>
-                    </div>
-                  </label>
-                </div>
-
-                {/* Toggles */}
-                <div className="grid sm:grid-cols-3 gap-2">
-                  <label className="flex items-center gap-2 text-[13px] text-white/80 cursor-pointer">
-                    <input type="checkbox" checked={shuffle} onChange={(e) => setShuffle(e.target.checked)} className="h-[18px] w-[18px] rounded-[4px] accent-[#532e95]" />
-                    <span>Shuffle</span>
-                  </label>
-                  <label className="flex items-center gap-2 text-[13px] text-white/80 cursor-pointer">
-                    <input type="checkbox" checked={untimed} onChange={(e) => setUntimed(e.target.checked)} className="h-[18px] w-[18px] rounded-[4px] accent-[#532e95]" />
-                    <span>Untimed mode</span>
-                  </label>
-                  <label className="flex items-center gap-2 text-[13px] text-white/80 cursor-pointer">
-                    <input type="checkbox" checked={mute} onChange={(e) => setMute(e.target.checked)} className="h-[18px] w-[18px] rounded-[4px] accent-[#532e95]" />
-                    <span>Mute music & SFX</span>
-                  </label>
-                </div>
-
-                {/* Footer actions */}
-                <div className="mt-3 flex items-center justify-end gap-2">
-                  <button type="button" onClick={() => setStep("choose")} className="h-8 px-2.5 rounded-[6px] text-white/80 hover:text-white ring-1 ring-white/12 hover:bg-white/10 text-sm font-medium">
-                    Back
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onPick("flashcards", { difficulty, mute, scope, shuffle, untimed })}
-                    className={[
-                      "inline-flex items-center gap-1.5 rounded-[6px]",
-                      "h-8 px-2.5",
-                      "text-white/90 hover:text-white",
-                      "bg-[#532e95] hover:bg-[#5f3aa6] active:bg-[#472b81]",
-                      "ring-1 ring-white/20 hover:ring-white/10",
-                      "transition-colors text-sm font-medium",
-                    ].join(" ")}
-                  >
-                    <span className="grid h-[14px] w-[14px] place-items-center">
-                      <img src="/icons/flashcards.svg" alt="" className="h-[14px] w-[14px] block" aria-hidden="true" />
-                    </span>
-                    <span>Start flashcards</span>
-                  </button>
-                </div>
-              </div>
-            ) : (
-              // --- Duels: ONLY Arena ---
-              <div className="mt-3 space-y-3">
-                <div className="grid gap-2">
-                  <label
-                    className={[
-                      "flex items-center justify-between rounded-[10px] p-3 ring-1 transition",
-                      "bg-white/5 ring-white/30",
-                      "text-white/90",
-                    ].join(" ")}
-                  >
-                    <div>
-                      <div className="text-[14px] font-semibold">Arena</div>
-                      <div className="text-[12px] text-white/70">Lives + 1v1 pairings, fastest correct wins.</div>
-                    </div>
-                    <input
-                      type="radio"
-                      name="duels-mode"
-                      checked={duelsMode === "ARENA"}
-                      readOnly
-                    />
-                  </label>
-                </div>
-
-                <div className="mt-3 flex items-center justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setStep("choose")}
-                    className="h-8 px-2.5 rounded-[6px] text-white/80 hover:text-white ring-1 ring-white/12 hover:bg-white/10 text-sm font-medium"
-                  >
-                    Back
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onPick("duels", { duelsMode: "ARENA" })}
-                    className={[
-                      "inline-flex items-center gap-1.5 rounded-[6px]",
-                      "h-8 px-2.5",
-                      "text-white/90 hover:text-white",
-                      "bg-[#532e95] hover:bg-[#5f3aa6] active:bg-[#472b81]",
-                      "ring-1 ring-white/20 hover:ring-white/10",
-                      "transition-colors text-sm font-medium",
-                    ].join(" ")}
-                  >
-                    <span className="grid h-[14px] w-[14px] place-items-center">
-                      <img src="/icons/duels.svg" alt="" className="h-[14px] w-[14px] block" aria-hidden="true" />
-                    </span>
-                    <span>Create lobby</span>
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
   );
 }

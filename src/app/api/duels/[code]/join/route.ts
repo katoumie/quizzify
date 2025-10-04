@@ -1,113 +1,142 @@
+// /src/app/api/duels/[code]/join/route.ts
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { duelsBus } from "@/lib/duels-bus";
 
-export async function POST(
-  req: Request,
-  ctx: { params: Promise<{ code: string }> }
-) {
+/**
+ * Idempotent join:
+ * - If userId provided: ensure one DuelPlayer per (sessionId, userId).
+ *   If a pre-seeded row exists with userId = null (common for host), link it,
+ *   then clean up other anonymous dupes.
+ * - If guest: dedupe by displayName within the last minute.
+ * - displayName rules:
+ *   - signed-in: use provided displayName if sent; otherwise default to username (or email local-part) or "Player"
+ *   - guest: must provide (we fallback to "Player")
+ */
+export async function POST(req: Request, ctx: { params: { code: string } }) {
   try {
-    const { code } = await ctx.params;
-    const { playerId, userId, displayName } = await req.json();
+    const { code } = ctx.params;
+    const body = await req.json().catch(() => ({} as any));
+    const userId: string | undefined = body?.userId || undefined;
+    // Important: treat empty/whitespace as "not provided"
+    const displayNameSent: string | undefined =
+      typeof body?.displayName === "string" && body.displayName.trim()
+        ? body.displayName.trim()
+        : undefined;
 
     const session = await prisma.duelSession.findUnique({
       where: { code },
-      select: { id: true, code: true },
+      select: { id: true, hostId: true, status: true },
     });
     if (!session) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+      return NextResponse.json({ error: "Lobby not found." }, { status: 404 });
     }
 
-    // Reuse existing player if provided/known
-    let player =
-      (playerId
-        ? await prisma.duelPlayer.findUnique({ where: { id: playerId } })
-        : null) ||
-      (userId
-        ? await prisma.duelPlayer.findFirst({
-            where: { sessionId: session.id, userId },
-          })
-        : null);
-
-    // Create if needed
-    if (!player) {
-      player = await prisma.duelPlayer.create({
-        data: {
-          sessionId: session.id,
-          userId: userId ?? null,
-          displayName: displayName || "Player",
-          lives: 3,
-          score: 0,
-          isReady: false,
-          byeCount: 0,
-        },
+    // Build a sensible default name for signed-in users if none was sent
+    let defaultSignedInName: string | undefined = undefined;
+    if (userId) {
+      const u = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { username: true, email: true },
       });
-    } else if (displayName && displayName !== player.displayName) {
-      player = await prisma.duelPlayer.update({
-        where: { id: player.id },
-        data: { displayName },
-      });
+      defaultSignedInName =
+        u?.username?.trim() ||
+        (u?.email ? u.email.split("@")[0] : undefined) ||
+        undefined;
     }
 
-    // Return + broadcast with nested user fields so avatars show up immediately
-    const joined = await prisma.duelPlayer.findUnique({
-      where: { id: player.id },
-      select: {
-        id: true,
-        userId: true,
-        displayName: true,
-        team: true,
-        lives: true,
-        score: true,
-        isReady: true,
-        eliminatedAt: true,
-        user: { select: { avatar: true, username: true } },
-      },
-    });
+    // Final displayName to store
+    const displayName =
+      displayNameSent ??
+      defaultSignedInName ??
+      "Player";
 
-    // 1) Point event (append-friendly UIs)
-    duelsBus.publish(session.id,   { type: "join", player: joined });
-    duelsBus.publish(session.code, { type: "join", player: joined });
+    let playerId: string;
 
-    // 2) Full snapshot (reconcile any missed point events)
-    const snap = await prisma.duelSession.findUnique({
-      where: { id: session.id },
-      select: {
-        id: true,
-        code: true,
-        hostId: true,
-        mode: true,
-        status: true,
-        options: true,
-        players: {
-          select: {
-            id: true,
-            userId: true,
-            displayName: true,
-            team: true,
-            lives: true,
-            score: true,
-            isReady: true,
-            eliminatedAt: true,
-            user: { select: { avatar: true, username: true } },
-          },
+    if (userId) {
+      // 1) Find by (sessionId, userId)
+      let existing = await prisma.duelPlayer.findFirst({
+        where: { sessionId: session.id, userId },
+        select: { id: true },
+      });
+
+      // 2) If none and this user is the host, link the oldest anonymous row
+      if (!existing && session.hostId === userId) {
+        const orphan = await prisma.duelPlayer.findFirst({
+          where: { sessionId: session.id, userId: null },
           orderBy: { connectedAt: "asc" },
-        },
-      },
-    });
-    if (snap) {
-      duelsBus.publish(session.id,   { type: "snapshot", payload: snap });
-      duelsBus.publish(session.code, { type: "snapshot", payload: snap });
+          select: { id: true },
+        });
+        if (orphan) {
+          await prisma.duelPlayer.update({
+            where: { id: orphan.id },
+            data: { userId },
+          });
+          existing = { id: orphan.id };
+
+          // Clean up other anonymous rows, if any
+          await prisma.duelPlayer.deleteMany({
+            where: { sessionId: session.id, userId: null, NOT: { id: orphan.id } },
+          });
+        }
+      }
+
+      if (existing) {
+        await prisma.duelPlayer.update({
+          where: { id: existing.id },
+          data: {
+            displayName,
+            lastSeenAt: new Date(),
+            connectedAt: new Date(),
+          },
+        });
+        playerId = existing.id;
+      } else {
+        const created = await prisma.duelPlayer.create({
+          data: {
+            sessionId: session.id,
+            userId,
+            displayName,
+            isReady: false,
+            connectedAt: new Date(),
+          },
+          select: { id: true },
+        });
+        playerId = created.id;
+      }
+    } else {
+      // Guest path: dedupe by same displayName within 60s
+      const guestName = displayName || "Player";
+      const recent = await prisma.duelPlayer.findFirst({
+        where: { sessionId: session.id, userId: null, displayName: guestName },
+        orderBy: { connectedAt: "desc" },
+        select: { id: true, connectedAt: true },
+      });
+
+      if (recent && Date.now() - new Date(recent.connectedAt).getTime() < 60_000) {
+        await prisma.duelPlayer.update({
+          where: { id: recent.id },
+          data: { lastSeenAt: new Date(), connectedAt: new Date(), displayName: guestName },
+        });
+        playerId = recent.id;
+      } else {
+        const created = await prisma.duelPlayer.create({
+          data: {
+            sessionId: session.id,
+            userId: null,
+            displayName: guestName,
+            isReady: false,
+            connectedAt: new Date(),
+          },
+          select: { id: true },
+        });
+        playerId = created.id;
+      }
     }
 
-    return NextResponse.json(joined);
+    return NextResponse.json({ ok: true, playerId });
   } catch (e: any) {
-    console.error(e);
-    return NextResponse.json(
-      { error: e?.message || "Failed to join." },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: e?.message ?? "Join failed." }, { status: 500 });
   }
 }
