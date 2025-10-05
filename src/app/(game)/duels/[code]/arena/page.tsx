@@ -1,4 +1,3 @@
-// src/app/(game)/duels/[code]/arena/page.tsx
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -21,9 +20,15 @@ type PlayerLite = {
   displayName?: string | null;
   username?: string | null;
   avatar?: Avatar;
+
+  stats?: { correct?: number; elapsedMs?: number; elapsedTotalMs?: number } | null;
   correct?: number;
   elapsedMs?: number;
-  stats?: { correct?: number; elapsedMs?: number } | null;
+  score?: number;
+
+  role?: "PLAYER" | "SPECTATOR";
+  lives?: number | null;
+  eliminatedAt?: string | null;
 };
 
 type DuelSessionLite = {
@@ -39,8 +44,9 @@ const AVATAR_SIZE = 48;
 const LEADER_SIZE = 64;
 const SESSION_KEY = "qz_auth";
 const GUEST_NAME_KEY = "qz_display_name";
+const DEBUG = process.env.NODE_ENV !== "production";
 
-/** --- Helpers --- */
+/** --- Helpers: MCQ build --- */
 function shuffle<T>(arr: T[]): T[] {
   const a = arr.slice();
   for (let i = a.length - 1; i > 0; i--) {
@@ -76,16 +82,50 @@ function extractAvatarSrc(avatar: Avatar): string | null {
   return null;
 }
 
+function looksLikeCuidish(s?: string | null): boolean {
+  if (!s) return false;
+  return /^[a-z0-9]{24,32}$/.test(s) && s[0] === "c";
+}
+function preferredName(displayName?: string | null, username?: string | null): string {
+  // Prefer human-entered displayName, then username; no "cuidish" filtering here
+  if (displayName) return displayName;
+  if (username) return username;
+  return "Player";
+}
+
+/** format ms helpers */
+function fmtMs(ms?: number | null): string {
+  if (ms == null || !Number.isFinite(ms)) return "—";
+  if (ms < 1000) return `${Math.round(ms)} ms`;
+  return `${(ms / 1000).toFixed(1)} s`;
+}
+
+/** total time from stats (server), fallback to avg*correct */
+function totalTimeFrom(p: PlayerLite): number | null {
+  const s = p.stats ?? null;
+  if (s?.elapsedTotalMs != null && Number.isFinite(s.elapsedTotalMs)) return Math.round(s.elapsedTotalMs);
+  const correct = (s?.correct ?? p.correct ?? 0) as number;
+  const avg = (s?.elapsedMs ?? p.elapsedMs ?? Number.POSITIVE_INFINITY) as number;
+  if (!Number.isFinite(avg) || correct <= 0) return null;
+  return Math.round(avg * correct);
+}
+
 function mapPlayers(arr: any[]): PlayerLite[] {
   return (arr ?? [])
     .map((p: any) => ({
       id: p.id ?? p.userId ?? crypto.randomUUID(),
-      displayName: p.displayName ?? p.user?.username ?? p.username ?? p.name ?? null,
       username: p.user?.username ?? p.username ?? null,
+      displayName: p.displayName ?? p.user?.username ?? p.name ?? null,
       avatar: (p.user?.avatar ?? p.avatar) as Avatar,
+
+      stats: p.stats ?? null,
       correct: p.correct ?? p.stats?.correct ?? undefined,
       elapsedMs: p.elapsedMs ?? p.stats?.elapsedMs ?? undefined,
-      stats: p.stats ?? null,
+      score: p.score ?? undefined,
+
+      role: (p.role as PlayerLite["role"]) ?? "PLAYER",
+      lives: p.lives ?? null,
+      eliminatedAt: p.eliminatedAt ?? null,
     }))
     .filter((p: PlayerLite) => !!p.id);
 }
@@ -127,27 +167,48 @@ function getStableGuestName(): string {
   return name;
 }
 
-/** Leader comparator: "most correct, then fastest" */
-function computeLeaderId(players: PlayerLite[]): string | null {
-  if (!players.length) return null;
-  const withAnyStats = players.filter(
-    (p) =>
-      typeof (p.correct ?? p.stats?.correct) === "number" ||
-      typeof (p.elapsedMs ?? p.stats?.elapsedMs) === "number"
+/** Single top-level Background component */
+function BgDots() {
+  return (
+    <div
+      className="pointer-events-none fixed inset-0 z-0"
+      style={{
+        backgroundImage:
+          "radial-gradient(rgba(0,0,0,0.10) 0.9px, transparent 0.9px), linear-gradient(to bottom, #f7f8fb 0%, #f7f8fb 52%, #c9cdd5 100%)",
+        backgroundSize: "12px 12px, 100% 100%",
+        backgroundPosition: "0 0, 0 0",
+        backgroundColor: "#f7f8fb",
+      }}
+    />
   );
-  const pool = withAnyStats.length ? withAnyStats : players;
-  const best = pool
-    .slice()
-    .sort((a, b) => {
-      const ac = (a.correct ?? a.stats?.correct ?? 0) as number;
-      const bc = (b.correct ?? b.stats?.correct ?? 0) as number;
-      if (ac !== bc) return bc - ac;
-      const at = (a.elapsedMs ?? a.stats?.elapsedMs ?? Number.POSITIVE_INFINITY) as number;
-      const bt = (b.elapsedMs ?? b.stats?.elapsedMs ?? Number.POSITIVE_INFINITY) as number;
-      if (at !== bt) return at - bt;
-      return a.id.localeCompare(b.id);
-    })[0];
-  return best?.id ?? null;
+}
+
+/** Rank players for leaderboard — include everyone */
+function rankPlayersForArena(players: PlayerLite[]) {
+  const rows = players.map((p) => {
+    const correct = (p.stats?.correct ?? p.correct ?? 0) as number;
+    const score = (p.score ?? 0) as number;
+    const avg = (p.stats?.elapsedMs ?? p.elapsedMs ?? Number.POSITIVE_INFINITY) as number;
+    const total = totalTimeFrom(p); // real total from server when available
+    return {
+      id: p.id,
+      name: preferredName(p.displayName ?? null, p.username ?? null),
+      avatar: extractAvatarSrc(p.avatar ?? null),
+      correct,
+      score,
+      avg,
+      total,
+    };
+  });
+
+  // Everyone is included; order still favors correct/score then avg time
+  return rows.sort((a, b) => {
+    const aPrimary = a.correct || a.score;
+    const bPrimary = b.correct || b.score;
+    if (aPrimary !== bPrimary) return bPrimary - aPrimary;
+    if (a.avg !== b.avg) return a.avg - b.avg;
+    return a.id.localeCompare(b.id);
+  });
 }
 
 /** Avatar circle */
@@ -213,10 +274,21 @@ export default function ArenaPage() {
   const [timeoutReveal, setTimeoutReveal] = useState(false);
 
   const [players, setPlayers] = useState<PlayerLite[]>([]);
-  const [debugCount, setDebugCount] = useState(0);
   const [lastEvt, setLastEvt] = useState<string>("—");
   const [sseConnected, setSseConnected] = useState(false);
   const gotRosterRef = useRef(false);
+
+  // Store my playerId from join (used to bump score on correct)
+  const [myPlayerId, setMyPlayerId] = useState<string | null>(null);
+  const pendingScoreRef = useRef(0);
+
+  // Optional: leader info from server/SSE
+  const [leaderIdServer, setLeaderIdServer] = useState<string | null>(null);
+  const [leaderNameServer, setLeaderNameServer] = useState<string | null>(null);
+  const [leaderAvatarServer, setLeaderAvatarServer] = useState<string | null>(null);
+
+  // Optional: “everyone finished” from SSE
+  const [everyoneDone, setEveryoneDone] = useState(false);
 
   const finished = idx >= questions.length;
   const current = !finished ? questions[idx] : undefined;
@@ -225,13 +297,15 @@ export default function ArenaPage() {
     try {
       const userId = getSignedInUserId();
       const body = userId ? { userId } : { displayName: getStableGuestName() };
-      await fetch(`/api/duels/${encodeURIComponent(String(code))}/join`, {
+      const r = await fetch(`/api/duels/${encodeURIComponent(String(code))}/join`, {
         method: "POST",
         ...getAuthInit(),
         headers: { "Content-Type": "application/json", ...(getAuthInit().headers || {}) },
         body: JSON.stringify(body),
         cache: "no-store",
       });
+      const j = await r.json().catch(() => null);
+      if (j?.playerId) setMyPlayerId(String(j.playerId));
     } catch {}
   }
   async function leaveLobby() {
@@ -275,7 +349,15 @@ export default function ArenaPage() {
       const r = await fetch(`/api/sets/${setId}`, { cache: "no-store", ...getAuthInit() });
       if (!r.ok) return null;
       const j = await r.json();
-      const cards: Card[] = (j.cards ?? j.data?.cards ?? []).filter((c: any) => c?.term && c?.definition);
+      const rawCards = j.cards ?? j.data?.cards ?? [];
+      const cards: Card[] = rawCards
+        .map((c: any) => ({
+          id: c.id ?? c.cardId ?? crypto.randomUUID(),
+          term: c.term ?? c.front ?? c.prompt ?? c.question ?? c.q,
+          definition: c.definition ?? c.back ?? c.answer ?? c.a ?? c.response,
+          skill: c.skill ?? null,
+        }))
+        .filter((c: Card) => c.term && c.definition);
       return {
         id: j.id ?? j.data?.id ?? setId,
         title: j.title ?? j.data?.title ?? j.name ?? j.data?.name ?? "Study Set",
@@ -327,7 +409,6 @@ export default function ArenaPage() {
       const firstRoster = await loadPlayersFromAPIs().catch(() => []);
       if (!cancel && firstRoster.length) {
         setPlayers(firstRoster);
-        setDebugCount(firstRoster.length);
         gotRosterRef.current = true;
       }
 
@@ -372,7 +453,6 @@ export default function ArenaPage() {
         const fresh = await loadPlayersFromAPIs();
         if (fresh.length) {
           setPlayers(fresh);
-          setDebugCount(fresh.length);
           gotRosterRef.current = true;
         }
       };
@@ -394,59 +474,50 @@ export default function ArenaPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.id, players.length]);
 
-  /** SSE */
+  /** SSE (roster + leader + all-finished) */
   useEffect(() => {
     if (!session?.id) return;
 
     let es: EventSource | null = null;
-    try {
-      es = new EventSource(`/api/duels/${code}/sse`, { withCredentials: true });
-    } catch {
-      return;
-    }
+    try { es = new EventSource(`/api/duels/${code}/sse`, { withCredentials: true }); } catch { return; }
 
-    es.onopen = () => {
-      setSseConnected(true);
-      setLastEvt("open");
-    };
-    es.onerror = () => {
-      setSseConnected(false);
-      setLastEvt("error");
-    };
+    es.onopen = () => { setSseConnected(true); setLastEvt("open"); };
+    es.onerror = () => { setSseConnected(false); setLastEvt("error"); };
     es.onmessage = (evt) => {
       if (!evt.data) return;
       try {
         const data = JSON.parse(evt.data);
-        const type = data?.type ?? "message";
-        setLastEvt(type);
+        const type = data?.type ?? data?.kind ?? data?.event ?? "message";
+        setLastEvt(String(type));
 
-        if (type === "lobby-state" && data?.session?.players) {
+        if ((type === "lobby-state" || type === "lobby:update") && data?.session?.players) {
           const mapped = mapPlayers(data.session.players);
+          if (DEBUG) {
+            console.log("[SSE lobby-state] players:", mapped.map(p => ({
+              id: p.id, name: p.displayName || p.username, score: p.score, correct: p.stats?.correct
+            })));
+          }
           setPlayers(mapped);
-          setDebugCount(mapped.length);
           if (mapped.length) gotRosterRef.current = true;
         } else if (type === "hb") {
           if (!gotRosterRef.current) {
             loadPlayersFromAPIs().then((fresh) => {
-              if (fresh.length) {
-                setPlayers(fresh);
-                setDebugCount(fresh.length);
-                gotRosterRef.current = true;
-              }
+              if (fresh.length) { setPlayers(fresh); gotRosterRef.current = true; }
             });
           }
+        } else if (type === "leader" || type === "arena:leader") {
+          if (data.leaderId) setLeaderIdServer(String(data.leaderId)); else setLeaderIdServer(null);
+          setLeaderNameServer(
+            preferredName(data.leaderName ?? null, data.leaderUsername ?? null)
+          );
+          setLeaderAvatarServer(data.leaderAvatar ?? null);
+        } else if (type === "all-finished") {
+          setEveryoneDone(true);
         }
-      } catch {
-        /* ignore */
-      }
+      } catch { /* ignore */ }
     };
 
-    return () => {
-      setSseConnected(false);
-      try {
-        es?.close();
-      } catch {}
-    };
+    return () => { setSseConnected(false); try { es?.close(); } catch {} };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.id, code]);
 
@@ -457,9 +528,57 @@ export default function ArenaPage() {
     return `${qNo} / ${questions.length}`;
   }, [idx, questions.length]);
 
+  /** Score bump on correct — queue + optimistic update */
+  async function postScore(delta: number) {
+    if (!myPlayerId) return;
+    const payload = { playerId: myPlayerId, delta };
+    try {
+      const res = await fetch(`/api/duels/${encodeURIComponent(String(code))}/score`, {
+        method: "POST",
+        ...getAuthInit(),
+        headers: { "Content-Type": "application/json", ...(getAuthInit().headers || {}) },
+        body: JSON.stringify(payload),
+      });
+      const j = await res.json().catch(() => ({} as any));
+      if (DEBUG) console.log("[SCORE→]", payload, "ok:", res.ok, j);
+    } catch (e) {
+      if (DEBUG) console.warn("[SCORE ERR]", e);
+    }
+  }
+  function addScore(delta = 1) {
+    // optimistic local bump for instant feedback (SSE will reconcile)
+    if (myPlayerId) {
+      setPlayers(prev => prev.map(p => p.id === myPlayerId ? { ...p, score: (p.score ?? 0) + delta } : p));
+    }
+
+    if (!myPlayerId) {
+      pendingScoreRef.current += delta;
+      if (DEBUG) console.log("[SCORE QUEUED]", delta, "pending:", pendingScoreRef.current);
+      return;
+    }
+    if (DEBUG) console.log("[SCORE NOW]", delta, "playerId:", myPlayerId);
+    postScore(delta);
+  }
+  // flush queued points once join returns
+  useEffect(() => {
+    if (!myPlayerId) return;
+    const queued = pendingScoreRef.current;
+    if (queued > 0) {
+      if (DEBUG) console.log("[SCORE FLUSH]", queued, "playerId:", myPlayerId);
+      postScore(queued).finally(() => {
+        pendingScoreRef.current = 0;
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [myPlayerId]);
+
   function onSelect(choiceId: string) {
     if (reveal || finished) return;
     setSelected(choiceId);
+
+    const isCorrect = !!current?.choices.find((c) => c.id === choiceId)?.isCorrect;
+    if (isCorrect) addScore(1);
+
     setReveal(true);
   }
 
@@ -498,19 +617,7 @@ export default function ArenaPage() {
     return () => clearInterval(id);
   }, [reveal, finished, idx]);
 
-  /** Background + shadows */
-  const BgDots = () => (
-    <div
-      className="pointer-events-none fixed inset-0 z-0"
-      style={{
-        backgroundImage:
-          "radial-gradient(rgba(0,0,0,0.10) 0.9px, transparent 0.9px), linear-gradient(to bottom, #f7f8fb 0%, #f7f8fb 52%, #c9cdd5 100%)",
-        backgroundSize: "12px 12px, 100% 100%",
-        backgroundPosition: "0 0, 0 0",
-        backgroundColor: "#f7f8fb",
-      }}
-    />
-  );
+  /** Shadows */
   const edgeShadowStyle: React.CSSProperties = {
     filter: "drop-shadow(3px 3px 0 rgba(0,0,0,0.22)) drop-shadow(12px 16px 22px rgba(0,0,0,0.10))",
   };
@@ -524,8 +631,78 @@ export default function ArenaPage() {
     [session, loading, questions.length, finished]
   );
 
-  /** Leader selection */
-  const leaderId = useMemo(() => computeLeaderId(players), [players]);
+  /** Compute provisional leader from client-known stats */
+  const leaderFromPlayers = useMemo(() => {
+    if (!players.length) return null;
+
+    const active = players.filter((p) => p.role !== "SPECTATOR" && !p.eliminatedAt && (p.lives == null || p.lives > 0));
+    const pool = active.length ? active : players;
+
+    const best = pool
+      .slice()
+      .sort((a, b) => {
+        const ac = (a.stats?.correct ?? a.correct ?? a.score ?? 0) as number;
+        const bc = (b.stats?.correct ?? b.correct ?? b.score ?? 0) as number;
+        if (ac !== bc) return bc - ac;
+
+        const at = (a.stats?.elapsedMs ?? a.elapsedMs ?? Number.POSITIVE_INFINITY) as number;
+        const bt = (b.stats?.elapsedMs ?? b.elapsedMs ?? Number.POSITIVE_INFINITY) as number;
+        if (at !== bt) return at - bt;
+
+        return a.id.localeCompare(b.id);
+      })[0];
+
+    return best?.id ?? null;
+  }, [players]);
+
+  function hasRealStats(p?: PlayerLite | null) {
+    if (!p) return false;
+    const correct = (p.stats?.correct ?? p.correct ?? 0) as number;
+    const score = (p.score ?? 0) as number;
+    return correct > 0 || score > 0;
+  }
+
+  let leaderId: string | null = null;
+  if (leaderIdServer) {
+    leaderId = leaderIdServer;
+  } else {
+    const candidateId = leaderFromPlayers ?? null;
+    const candidate = players.find((p) => p.id === candidateId) || null;
+    leaderId = hasRealStats(candidate) ? candidateId : null;
+  }
+
+  const playersOrdered = useMemo(() => {
+    if (!leaderId) return players;
+    const lead = players.find((p) => p.id === leaderId);
+    if (!lead) return players;
+    const rest = players.filter((p) => p.id !== leaderId);
+    return [lead, ...rest];
+  }, [players, leaderId]);
+
+  const leaderPlayer = useMemo(
+    () => (leaderId ? players.find((p) => p.id === leaderId) || null : null),
+    [leaderId, players]
+  );
+  const leaderName =
+    leaderNameServer ?? preferredName(leaderPlayer?.displayName ?? null, leaderPlayer?.username ?? null);
+  const leaderAvatar =
+    leaderAvatarServer ?? (leaderPlayer ? extractAvatarSrc(leaderPlayer.avatar ?? null) : null);
+
+  // Leaderboard + flags
+  const leaderboard = useMemo(() => rankPlayersForArena(players), [players]);
+
+  // “Everyone done” heuristic (in case SSE didn't send all-finished)
+  const allPlayersDone = useMemo(() => {
+    const active = players.filter((p) => p.role !== "SPECTATOR");
+    if (!active.length) return false;
+    return active.every((p) => {
+      const hasResult = (p.stats?.correct ?? p.correct ?? 0) > 0 || (p.score ?? 0) > 0;
+      const out = (p.lives != null && p.lives <= 0) || !!p.eliminatedAt;
+      return hasResult || out;
+    });
+  }, [players]);
+
+  const isFinal = everyoneDone || allPlayersDone || session?.status === "ENDED" || session?.status === "CANCELLED";
 
   /** Render */
   if (loading) {
@@ -551,7 +728,7 @@ export default function ArenaPage() {
         <BgDots />
         <div className="relative z-10 flex h-full items-center justify-center">
           <div className="max-w-md rounded-2xl border border-red-400/30 bg-red-500/10 p-7 text-center">
-            <h2 className="mb-2 text-xl font-semibold text-white">Session not found</h2>
+            <h2 className="mb-2 text-xl font-bold text-white">Session not found</h2>
             <p className="text-sm text-white/80">
               I couldn’t locate a duel session for code <span className="font-mono">{String(code)}</span>. Ensure the session API returns <code>setId</code>, or pass <code>?setId=</code> in the URL.
             </p>
@@ -561,16 +738,24 @@ export default function ArenaPage() {
     );
   }
 
-  if (!setData || !setData.cards?.length) {
+  if (!questions.length) {
     return (
       <div className={`${continuum.className} relative h-full`}>
         <BgDots />
         <div className="relative z-10 flex h-full items-center justify-center">
-          <div className="max-w-md rounded-2xl border border-yellow-400/30 bg-yellow-500/10 p-7 text-center">
-            <h2 className="mb-2 text-xl font-semibold text-white">No cards in set</h2>
-            <p className="text-sm text-white/80">The selected set has no usable term/definition pairs. Add cards then reload.</p>
+          <div className="max-w-md rounded-2xl border-[3px] border-white bg-[#eae9f0] p-7 text-center">
+            <h2 className="mb-2 text-xl font-bold text-[#716c76]">No cards in set</h2>
+            <p className="text-sm text-[#716c76] font-medium">
+              This set produced no usable term/definition pairs. Check your set content or the
+              term/definition field names returned by the API.
+            </p>
           </div>
         </div>
+        {DEBUG && (
+          <div className="fixed bottom-2 left-2 z-20 rounded bg-black/60 px-2 py-1 text-[11px] text-white/85">
+            debug · questions: {questions.length} · idx: {idx}
+          </div>
+        )}
       </div>
     );
   }
@@ -580,7 +765,7 @@ export default function ArenaPage() {
       <BgDots />
       <ArenaBGM active={bgmActive} />
 
-      {/* Left progress pill — cut to screen edge */}
+      {/* Left progress pill */}
       <div className="fixed left-0 top-5 z-20 -ml-[3px]">
         <div
           className={`${continuum.className} flex h-[46px] items-center rounded-l-none rounded-r-[34px] border-[3px] border-l-0 border-[#716c76] bg-[#eae9f0] px-5`}
@@ -592,7 +777,7 @@ export default function ArenaPage() {
         </div>
       </div>
 
-      {/* Right timer pill — cut to screen edge */}
+      {/* Right timer pill */}
       <div className="fixed right-0 top-5 z-20 -mr-[3px]">
         <div
           className="flex h-[46px] items-center rounded-r-none rounded-l-[34px] border-[3px] border-r-0 border-[#716c76] bg-[#eae9f0] px-6 gap-2"
@@ -616,46 +801,59 @@ export default function ArenaPage() {
         </div>
       </div>
 
-      {/* Players column (under timer) — extra top gap for space */}
-      <div className="fixed right-3 z-20 flex flex-col items-end gap-3 pt-5" style={{ top: "86px" }}>
-        {players.map((p) => {
-          const isLeader = p.id === leaderId;
+      {/* Players column — leader first */}
+      <div className="fixed right-3 z-20 flex flex-col items-end gap-3 pt-5" style={{ top: "96px" }}>
+        {playersOrdered.map((p, i) => {
+          const isLeader = !!leaderId && p.id === leaderId && i === 0;
           const size = isLeader ? LEADER_SIZE : AVATAR_SIZE;
-          const label = p.displayName ?? p.username ?? "Player";
+          const label = preferredName(p.displayName ?? null, p.username ?? null);
 
           return (
             <div key={p.id} className="flex items-center gap-2">
-              {/* Leader's username BEFORE avatar, styled exactly like Set Name */}
               {isLeader && (
                 <div
                   className={`${continuum.className} text-[20px] font-bold tracking-[0.03em] text-[#716c76]`}
                   style={{ textShadow: "0 1px 0 rgba(255,255,255,0.35)", marginRight: 2 }}
-                  title={label}
+                  title={leaderName || label}
                 >
-                  {label}
+                  {leaderName || label}
                 </div>
               )}
-              <AvatarCircle name={label} src={extractAvatarSrc(p.avatar ?? null)} size={size} />
+              <AvatarCircle
+                name={isLeader ? (leaderName || label) : label}
+                src={isLeader ? leaderAvatar || extractAvatarSrc(p.avatar ?? null) : extractAvatarSrc(p.avatar ?? null)}
+                size={size}
+              />
             </div>
           );
         })}
       </div>
 
-      {/* Debug (dev only) */}
-      {process.env.NODE_ENV !== "production" && (
-        <div className="fixed bottom-2 right-2 z-20 rounded bg-black/40 px-2 py-1 text-xs text-white/80">
-          players: {players.length} {sseConnected ? "(sse)" : "(poll)"} · last {lastEvt}
+      {/* Debug overlay (dev only) */}
+      {DEBUG && (
+        <div className="fixed bottom-2 right-2 z-20 rounded bg-black/60 px-2 py-1 text-[11px] text-white/85 space-y-1 max-w-[42vw]">
+          <div>
+            players:{players.length} {sseConnected ? "(sse)" : "(poll)"} · last:{lastEvt} ·
+            myId:{myPlayerId ? "yes" : "no"} · queued:{pendingScoreRef.current} ·
+            finished:{String(finished)} · isFinal:{String(isFinal)}
+          </div>
+          <div>lb rows:{leaderboard.length}</div>
+          <div className="max-h-[22vh] overflow-auto whitespace-pre leading-tight">
+            {players.map(p =>
+              `${preferredName(p.displayName,p.username)}  s:${p.score||0}  c:${p.stats?.correct||0}  total:${fmtMs(totalTimeFrom(p) ?? undefined)}`
+            ).join("\n")}
+          </div>
         </div>
       )}
 
-      {/* Bigger center pill (set title) */}
+      {/* Center title pill */}
       <div className="fixed left-1/2 top-5 z-20 -translate-x-1/2">
         <div
           className={`${continuum.className} flex h-[54px] items-center rounded-[34px] border-[3px] border-white bg-[#eae9f0] px-8`}
           style={edgeShadowStyle}
         >
           <div className="text-[20px] font-bold tracking-[0.03em] text-[#716c76]">
-            {setData.title ?? setData.name ?? "Study Set"}
+            {setData?.title ?? setData?.name ?? "Study Set"}
           </div>
         </div>
       </div>
@@ -727,13 +925,13 @@ export default function ArenaPage() {
 
                   {/* Footer */}
                   <div className="mt-6 flex items-center justify-between">
-                    <div className="text-[15px] text-[#716c76]">
+                    <div className="text-[15px] text-[#716c76] font-medium">
                       {reveal ? (
                         current.choices.find((c) => c.isCorrect)?.id === selected ? (
-                          <span className="text-emerald-600 font-semibold">Correct!</span>
+                          <span className="text-emerald-600 font-bold">Correct!</span>
                         ) : (
                           <>
-                            <span className="text-rose-600 font-semibold">Wrong.</span>{" "}
+                            <span className="text-rose-600 font-bold">Wrong.</span>{" "}
                             <span className="text-[#716c76]">Correct: {current.correctDefinition}</span>
                           </>
                         )
@@ -747,15 +945,66 @@ export default function ArenaPage() {
               )}
             </AnimatePresence>
 
+            {/* Results / Leaderboard after user finishes */}
             {finished && (
               <motion.div
                 initial={{ opacity: 0, y: 10, scale: 0.98 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
-                className="mx-auto max-w-lg rounded-[22px] border-[3px] border-white bg-[#eae9f0] p-7 text-center"
+                className="mx-auto w-full max-w-2xl rounded-[22px] border-[3px] border-white bg-[#eae9f0] p-6 md:p-7"
                 style={edgeShadowStyle}
               >
-                <div className="mb-2 text-xl font-bold text-[#716c76]">Great run!</div>
-                <div className="text-[15px] text-[#716c76]">You’ve reached the end of this set preview.</div>
+                <div className="mb-3 flex items-center justify-between">
+                  <div className="text-xl font-bold text-[#716c76]">
+                    {isFinal ? "Final leaderboard" : "Waiting for others…"}
+                  </div>
+                  {!isFinal && (
+                    <div className="text-sm text-[#716c76] font-medium">Live leaderboard</div>
+                  )}
+                </div>
+
+                {leaderboard.length ? (
+                  <div className="mt-2 space-y-2">
+                    {leaderboard.map((r, i) => {
+                      const rank = i + 1;
+                      const isPodium = rank <= 3;
+                      const size = isPodium && rank === 1 ? 56 : 44;
+                      const medal =
+                        rank === 1 ? "🥇" :
+                        rank === 2 ? "🥈" :
+                        rank === 3 ? "🥉" : String(rank);
+
+                      return (
+                        <div
+                          key={r.id}
+                          className="flex items-center justify-between rounded-xl border-[3px] border-white bg-white/50 px-3 py-2"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="w-6 text-center text-lg">{medal}</div>
+                            <AvatarCircle name={r.name} src={r.avatar} size={size} />
+                            <div className="ml-1">
+                              <div className="text-[15px] text-[#716c76] font-bold">{r.name}</div>
+                              <div className="text-xs text-[#716c76]/70 font-medium">
+                                Total time: {fmtMs(r.total ?? undefined)}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div className="text-[15px] font-bold text-[#716c76]">
+                              {r.correct > 0 ? `${r.correct}` : `${r.score ?? 0}`}
+                            </div>
+                            <div className="text-xs text-[#716c76]/70 font-medium">
+                              {r.correct > 0 ? "correct" : "points"}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="mt-1 rounded-xl border-[3px] border-white bg-white/40 px-4 py-4 text-center text-[#716c76] font-medium">
+                    {isFinal ? "Nobody answered correctly." : "No results yet. Waiting for first correct…"}
+                  </div>
+                )}
               </motion.div>
             )}
           </div>

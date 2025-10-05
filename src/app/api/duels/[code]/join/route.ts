@@ -4,6 +4,10 @@ export const runtime = "nodejs";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
+function looksLikeCuidish(s?: string | null) {
+  return !!s && /^[a-z0-9]{24,32}$/.test(s) && s[0] === "c";
+}
+
 /**
  * Idempotent join:
  * - If userId provided: ensure one DuelPlayer per (sessionId, userId).
@@ -19,7 +23,6 @@ export async function POST(req: Request, ctx: { params: { code: string } }) {
     const { code } = ctx.params;
     const body = await req.json().catch(() => ({} as any));
     const userId: string | undefined = body?.userId || undefined;
-    // Important: treat empty/whitespace as "not provided"
     const displayNameSent: string | undefined =
       typeof body?.displayName === "string" && body.displayName.trim()
         ? body.displayName.trim()
@@ -40,15 +43,12 @@ export async function POST(req: Request, ctx: { params: { code: string } }) {
         where: { id: userId },
         select: { username: true, email: true },
       });
-      defaultSignedInName =
-        u?.username?.trim() ||
-        (u?.email ? u.email.split("@")[0] : undefined) ||
-        undefined;
+      const candidate = u?.username?.trim() || (u?.email ? u.email.split("@")[0] : "");
+      defaultSignedInName = candidate && !looksLikeCuidish(candidate) ? candidate : undefined;
     }
 
-    // Final displayName to store
     const displayName =
-      displayNameSent ??
+      (displayNameSent && !looksLikeCuidish(displayNameSent) ? displayNameSent : undefined) ??
       defaultSignedInName ??
       "Player";
 
@@ -135,6 +135,7 @@ export async function POST(req: Request, ctx: { params: { code: string } }) {
       }
     }
 
+    // Return playerId so the client can post score/answers
     return NextResponse.json({ ok: true, playerId });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Join failed." }, { status: 500 });

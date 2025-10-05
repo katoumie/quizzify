@@ -1,3 +1,4 @@
+// /src/app/api/duels/[code]/sse/route.ts
 export const runtime = "nodejs";
 
 import { prisma } from "@/lib/prisma";
@@ -7,7 +8,7 @@ function sse(obj: any) {
   return `data: ${JSON.stringify(obj)}\n\n`;
 }
 
-/** Build a compact signature for cheap diffing (status + roster + scores/stats) */
+/** Build a compact signature for cheap diffing (status + roster) */
 function buildSig(session: {
   status: string;
   startedAt?: Date | null;
@@ -20,47 +21,34 @@ function buildSig(session: {
       id: p.id,
       userId: p.userId ?? null,
       displayName: p.displayName ?? p.user?.username ?? "",
-      username: p.user?.username ?? null,
-      avatar: p.user?.avatar ?? null,
-      role: p.role ?? "PLAYER",
-      lives: p.lives ?? 3,
       isReady: !!p.isReady,
-      score: p.score ?? 0,                              // <-- include score
-      // minimal stats signature; any change forces a new lobby-state
-      stats: p.stats
-        ? {
-            c: p.stats.correct ?? 0,
-            a: p.stats.elapsedMs ?? null,
-            t: p.stats.elapsedTotalMs ?? null,
-            l: p.stats.lastCorrectAt ?? null,
-          }
-        : { c: 0, a: null, t: null, l: null },
+      lives: p.lives ?? 3,
+      role: p.role ?? "PLAYER",
+      avatar: p.user?.avatar ?? null,
+      username: p.user?.username ?? null,
     })),
   });
 }
 
-/** Compute per-player stats for correct answers (avg + total + last) */
+/** Compute per-player correct + avg responseMs and return a Map */
 async function getAnswerStatsMap(sessionId: string) {
   const agg = await prisma.duelAnswer.groupBy({
     by: ["playerId"],
     where: { isCorrect: true, round: { sessionId } },
     _count: { _all: true },
     _avg: { responseMs: true },
-    _sum: { responseMs: true },
     _max: { createdAt: true },
   });
 
   const map = new Map<
     string,
-    { correct: number; elapsedMs?: number; elapsedTotalMs?: number; lastCorrectAt?: number }
+    { correct: number; elapsedMs?: number; lastCorrectAt?: number }
   >();
   for (const g of agg) {
     map.set(g.playerId, {
       correct: g._count._all,
       elapsedMs:
         typeof g._avg.responseMs === "number" ? Math.round(g._avg.responseMs) : undefined,
-      elapsedTotalMs:
-        typeof g._sum.responseMs === "number" ? Math.round(g._sum.responseMs) : undefined,
       lastCorrectAt: g._max.createdAt ? +new Date(g._max.createdAt) : undefined,
     });
   }
@@ -117,7 +105,6 @@ async function getLobbySnapshot(code: string) {
           role: true,
           score: true,
           connectedAt: true,
-          eliminatedAt: true,
           user: { select: { id: true, username: true, avatar: true } },
         },
         orderBy: { connectedAt: "asc" },
@@ -127,37 +114,8 @@ async function getLobbySnapshot(code: string) {
 
   if (!session) return null;
 
+  // Aggregate stats once and attach to players
   const statsMap = await getAnswerStatsMap(session.id);
-
-  const players = session.players.map((p) => {
-    const s = statsMap.get(p.id);
-    return {
-      id: p.id,
-      userId: p.userId ?? null,
-      displayName: p.displayName ?? p.user?.username ?? "Player",
-      isReady: !!p.isReady,
-      lives: p.lives ?? 3,
-      role: p.role ?? "PLAYER",
-      username: p.user?.username ?? null,
-      avatar: p.user?.avatar ?? null,
-      connectedAt: p.connectedAt,
-      eliminatedAt: p.eliminatedAt ?? null,
-      score: p.score ?? 0,
-      stats: s
-        ? {
-            correct: s.correct,
-            elapsedMs: s.elapsedMs,
-            elapsedTotalMs: s.elapsedTotalMs,
-            lastCorrectAt: s.lastCorrectAt,
-          }
-        : {
-            correct: 0,
-            elapsedMs: undefined,
-            elapsedTotalMs: undefined,
-            lastCorrectAt: undefined,
-          },
-    };
-  });
 
   return {
     id: session.id,
@@ -166,25 +124,25 @@ async function getLobbySnapshot(code: string) {
     hostId: session.hostId,
     setId: session.setId,
     startedAt: session.startedAt,
-    players,
+    players: session.players.map((p) => {
+      const s = statsMap.get(p.id);
+      return {
+        id: p.id,
+        userId: p.userId ?? null,
+        displayName: p.displayName ?? p.user?.username ?? "Player",
+        isReady: !!p.isReady,
+        lives: p.lives ?? 3,
+        role: p.role ?? "PLAYER",
+        username: p.user?.username ?? null,
+        avatar: p.user?.avatar ?? null,
+        connectedAt: p.connectedAt,
+        score: p.score ?? 0,
+        stats: s
+          ? { correct: s.correct, elapsedMs: s.elapsedMs, lastCorrectAt: s.lastCorrectAt }
+          : { correct: 0, elapsedMs: undefined, lastCorrectAt: undefined },
+      };
+    }),
   };
-}
-
-/** “Done” means: has some result (correct>0 or score>0) OR is out (no lives / eliminated) */
-function everyoneFinished(players: Array<{
-  role?: string | null;
-  lives?: number | null;
-  eliminatedAt?: Date | string | null;
-  stats?: { correct?: number } | null;
-  score?: number | null;
-}>) {
-  const active = players.filter((p) => p.role !== "SPECTATOR");
-  if (!active.length) return false;
-  return active.every((p) => {
-    const hasResult = (p.stats?.correct ?? 0) > 0 || (p.score ?? 0) > 0;
-    const out = (p.lives != null && p.lives <= 0) || !!p.eliminatedAt;
-    return hasResult || out;
-  });
 }
 
 export async function GET(_req: Request, ctx: { params: { code: string } }) {
@@ -195,13 +153,12 @@ export async function GET(_req: Request, ctx: { params: { code: string } }) {
       let closed = false;
       let lastSig = "";
       let lastLeaderId: string | null = null;
-      let lastAllFinished: boolean | null = null;
 
       const send = (obj: any) => {
         try {
           controller.enqueue(new TextEncoder().encode(sse(obj)));
         } catch {
-          /* ignore */
+          // ignore
         }
       };
 
@@ -233,11 +190,7 @@ export async function GET(_req: Request, ctx: { params: { code: string } }) {
         });
       }
 
-      // Initial all-finished (heuristic)
-      lastAllFinished = everyoneFinished(initial.players);
-      if (lastAllFinished) send({ type: "all-finished", allFinished: true });
-
-      // Polling loop: emit when anything meaningful changes
+      // Polling loop: emit when status OR roster changes; also emit leader on change
       const pollMs = 1200;
       const poll = setInterval(async () => {
         if (closed) return;
@@ -272,12 +225,6 @@ export async function GET(_req: Request, ctx: { params: { code: string } }) {
               send({ type: "leader", leaderId: null });
             }
           }
-
-          const allDone = everyoneFinished(snap.players) || snap.status === "ENDED" || snap.status === "CANCELLED";
-          if (allDone !== lastAllFinished) {
-            lastAllFinished = allDone;
-            send({ type: "all-finished", allFinished: allDone });
-          }
         } catch (err: any) {
           send({ type: "warn", message: err?.message ?? "poll-failed" });
         }
@@ -289,7 +236,7 @@ export async function GET(_req: Request, ctx: { params: { code: string } }) {
         send({ type: "hb", ts: Date.now() });
       }, 15000);
 
-      // Cleanup
+      // best-effort cleanup
       const close = () => {
         if (closed) return;
         closed = true;
@@ -299,7 +246,7 @@ export async function GET(_req: Request, ctx: { params: { code: string } }) {
           controller.close();
         } catch {}
       };
-      // @ts-ignore
+      // @ts-ignore (some runtimes expose this)
       controller?.signal?.addEventListener?.("abort", close);
     },
   });

@@ -374,6 +374,7 @@ model DuelPlayer {
   connectedAt  DateTime        @default(now())
   lastSeenAt   DateTime?
   eliminatedAt DateTime?
+  finishedAt   DateTime? 
   byeCount     Int             @default(0)
 
   // Back-refs
