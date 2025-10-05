@@ -1,43 +1,14 @@
+// /src/app/api/duels/[code]/sse/route.ts
 export const runtime = "nodejs";
 
 import { prisma } from "@/lib/prisma";
 
-/** Helper to format SSE line */
+/** Helper to format one SSE line */
 function sse(obj: any) {
   return `data: ${JSON.stringify(obj)}\n\n`;
 }
 
-/** Build a compact signature for cheap diffing (status + roster + scores/stats) */
-function buildSig(session: {
-  status: string;
-  startedAt?: Date | null;
-  players: Array<any>;
-}) {
-  return JSON.stringify({
-    status: session.status,
-    startedAt: session.startedAt ? +new Date(session.startedAt) : null,
-    players: session.players.map((p) => ({
-      id: p.id,
-      userId: p.userId ?? null,
-      displayName: p.displayName ?? p.user?.username ?? "",
-      username: p.user?.username ?? null,
-      avatar: p.user?.avatar ?? null,
-      role: p.role ?? "PLAYER",
-      lives: p.lives ?? 3,
-      isReady: !!p.isReady,
-      score: p.score ?? 0,                              // <-- include score
-      // minimal stats signature; any change forces a new lobby-state
-      stats: p.stats
-        ? {
-            c: p.stats.correct ?? 0,
-            a: p.stats.elapsedMs ?? null,
-            t: p.stats.elapsedTotalMs ?? null,
-            l: p.stats.lastCorrectAt ?? null,
-          }
-        : { c: 0, a: null, t: null, l: null },
-    })),
-  });
-}
+/** === Stats helpers ======================================================= */
 
 /** Compute per-player stats for correct answers (avg + total + last) */
 async function getAnswerStatsMap(sessionId: string) {
@@ -67,7 +38,7 @@ async function getAnswerStatsMap(sessionId: string) {
   return map;
 }
 
-/** Pick leader from stats: more correct/score → lower avg time → earlier last-correct → id */
+/** Choose a leader: more correct/score → lower avg time → earlier last-correct → id */
 function pickLeaderFromStats(
   players: Array<{
     id: string;
@@ -96,7 +67,8 @@ function pickLeaderFromStats(
   return ranked[0]?.id ?? null;
 }
 
-/** Load current lobby snapshot and enrich with stats & score */
+/** === Snapshot + signature =============================================== */
+
 async function getLobbySnapshot(code: string) {
   const session = await prisma.duelSession.findUnique({
     where: { code },
@@ -118,7 +90,10 @@ async function getLobbySnapshot(code: string) {
           score: true,
           connectedAt: true,
           eliminatedAt: true,
-          user: { select: { id: true, username: true, avatar: true } },
+          // NEW: finished flags
+          isFinished: true,
+          finishedAt: true,
+          user: { select: { id: true, username: true, avatar: true} },
         },
         orderBy: { connectedAt: "asc" },
       },
@@ -143,6 +118,8 @@ async function getLobbySnapshot(code: string) {
       connectedAt: p.connectedAt,
       eliminatedAt: p.eliminatedAt ?? null,
       score: p.score ?? 0,
+      isFinished: !!p.isFinished,
+      finishedAt: p.finishedAt ?? null,
       stats: s
         ? {
             correct: s.correct,
@@ -170,22 +147,57 @@ async function getLobbySnapshot(code: string) {
   };
 }
 
-/** “Done” means: has some result (correct>0 or score>0) OR is out (no lives / eliminated) */
-function everyoneFinished(players: Array<{
-  role?: string | null;
-  lives?: number | null;
-  eliminatedAt?: Date | string | null;
-  stats?: { correct?: number } | null;
-  score?: number | null;
-}>) {
-  const active = players.filter((p) => p.role !== "SPECTATOR");
-  if (!active.length) return false;
-  return active.every((p) => {
-    const hasResult = (p.stats?.correct ?? 0) > 0 || (p.score ?? 0) > 0;
-    const out = (p.lives != null && p.lives <= 0) || !!p.eliminatedAt;
-    return hasResult || out;
+/** Compact signature for cheap diffing */
+function buildSig(session: {
+  status?: string | null;
+  startedAt?: Date | number | null;
+  players: Array<any>;
+}) {
+  return JSON.stringify({
+    status: session.status ?? null,
+    startedAt: session.startedAt ? +new Date(session.startedAt) : null,
+    players: session.players.map((p) => ({
+      id: p.id,
+      userId: p.userId ?? null,
+      displayName: p.displayName ?? "",
+      username: p.username ?? null,
+      avatar: p.avatar ?? null,
+      role: p.role ?? "PLAYER",
+      lives: p.lives ?? 3,
+      isReady: !!p.isReady,
+      eliminatedAt: p.eliminatedAt ?? null,
+      score: p.score ?? 0,
+      // stats signature (changes force lobby-state)
+      stats: p.stats
+        ? {
+            c: p.stats.correct ?? 0,
+            a: p.stats.elapsedMs ?? null,
+            t: p.stats.elapsedTotalMs ?? null,
+            l: p.stats.lastCorrectAt ?? null,
+          }
+        : { c: 0, a: null, t: null, l: null },
+      // include finished flags in signature
+      finished: !!p.isFinished,
+      fAt: p.finishedAt ? +new Date(p.finishedAt) : null,
+    })),
   });
 }
+
+/** STRICT finalization:
+ * - Session ended (ENDED/CANCELLED), OR
+ * - Every non-spectator is finished OR out (lives<=0 or eliminated).
+ */
+function computeAllFinishedStrict(snap: {
+  status?: string | null;
+  players: Array<{ role?: string | null; isFinished?: boolean; lives?: number | null; eliminatedAt?: Date | string | null }>;
+}) {
+  if (snap.status === "ENDED" || snap.status === "CANCELLED") return true;
+  const active = snap.players.filter((p) => p.role !== "SPECTATOR");
+  if (!active.length) return false;
+  return active.every((p) => !!p.isFinished || (p.lives != null && p.lives <= 0) || !!p.eliminatedAt);
+}
+
+/** === SSE handler ========================================================= */
 
 export async function GET(_req: Request, ctx: { params: { code: string } }) {
   const { code } = ctx.params;
@@ -200,9 +212,7 @@ export async function GET(_req: Request, ctx: { params: { code: string } }) {
       const send = (obj: any) => {
         try {
           controller.enqueue(new TextEncoder().encode(sse(obj)));
-        } catch {
-          /* ignore */
-        }
+        } catch { /* ignore */ }
       };
 
       // Initial snapshot
@@ -217,6 +227,7 @@ export async function GET(_req: Request, ctx: { params: { code: string } }) {
         startedAt: initial.startedAt,
         players: initial.players,
       });
+
       send({ type: "hello", mode: "lobby", code, sessionId: initial.id });
       send({ type: "lobby-state", session: initial });
 
@@ -233,12 +244,11 @@ export async function GET(_req: Request, ctx: { params: { code: string } }) {
         });
       }
 
-      // Initial all-finished (heuristic)
-      lastAllFinished = everyoneFinished(initial.players);
-      if (lastAllFinished) send({ type: "all-finished", allFinished: true });
+      // Initial finalization (strict)
+      lastAllFinished = computeAllFinishedStrict(initial);
+      if (lastAllFinished) send({ type: "all-finished", sessionId: initial.id, allFinished: true });
 
-      // Polling loop: emit when anything meaningful changes
-      const pollMs = 1200;
+      // Polling loop
       const poll = setInterval(async () => {
         if (closed) return;
         try {
@@ -273,15 +283,15 @@ export async function GET(_req: Request, ctx: { params: { code: string } }) {
             }
           }
 
-          const allDone = everyoneFinished(snap.players) || snap.status === "ENDED" || snap.status === "CANCELLED";
+          const allDone = computeAllFinishedStrict(snap);
           if (allDone !== lastAllFinished) {
             lastAllFinished = allDone;
-            send({ type: "all-finished", allFinished: allDone });
+            send({ type: "all-finished", sessionId: snap.id, allFinished: allDone });
           }
         } catch (err: any) {
           send({ type: "warn", message: err?.message ?? "poll-failed" });
         }
-      }, pollMs);
+      }, 1200);
 
       // Heartbeat
       const hb = setInterval(() => {
@@ -295,9 +305,7 @@ export async function GET(_req: Request, ctx: { params: { code: string } }) {
         closed = true;
         clearInterval(poll);
         clearInterval(hb);
-        try {
-          controller.close();
-        } catch {}
+        try { controller.close(); } catch {}
       };
       // @ts-ignore
       controller?.signal?.addEventListener?.("abort", close);

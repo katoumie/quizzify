@@ -1,3 +1,4 @@
+// /src/app/(game)/duels/[code]/arena/page.tsx
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -21,7 +22,12 @@ type PlayerLite = {
   username?: string | null;
   avatar?: Avatar;
 
-  stats?: { correct?: number; elapsedMs?: number; elapsedTotalMs?: number } | null;
+  stats?: {
+    correct?: number;
+    elapsedMs?: number;
+    elapsedTotalMs?: number;
+    lastCorrectAt?: number;
+  } | null;
   correct?: number;
   elapsedMs?: number;
   score?: number;
@@ -29,6 +35,10 @@ type PlayerLite = {
   role?: "PLAYER" | "SPECTATOR";
   lives?: number | null;
   eliminatedAt?: string | null;
+
+  // NEW:
+  isFinished?: boolean;
+  finishedAt?: string | null;
 };
 
 type DuelSessionLite = {
@@ -44,9 +54,8 @@ const AVATAR_SIZE = 48;
 const LEADER_SIZE = 64;
 const SESSION_KEY = "qz_auth";
 const GUEST_NAME_KEY = "qz_display_name";
-const DEBUG = process.env.NODE_ENV !== "production";
 
-/** --- Helpers: MCQ build --- */
+/** --- Helpers --- */
 function shuffle<T>(arr: T[]): T[] {
   const a = arr.slice();
   for (let i = a.length - 1; i > 0; i--) {
@@ -86,28 +95,16 @@ function looksLikeCuidish(s?: string | null): boolean {
   if (!s) return false;
   return /^[a-z0-9]{24,32}$/.test(s) && s[0] === "c";
 }
-function preferredName(displayName?: string | null, username?: string | null): string {
-  // Prefer human-entered displayName, then username; no "cuidish" filtering here
-  if (displayName) return displayName;
-  if (username) return username;
+function normalizeName(username?: string | null, displayName?: string | null): string {
+  if (username && !looksLikeCuidish(username)) return username;
+  if (displayName && !looksLikeCuidish(displayName)) return displayName;
   return "Player";
 }
 
-/** format ms helpers */
 function fmtMs(ms?: number | null): string {
   if (ms == null || !Number.isFinite(ms)) return "—";
   if (ms < 1000) return `${Math.round(ms)} ms`;
   return `${(ms / 1000).toFixed(1)} s`;
-}
-
-/** total time from stats (server), fallback to avg*correct */
-function totalTimeFrom(p: PlayerLite): number | null {
-  const s = p.stats ?? null;
-  if (s?.elapsedTotalMs != null && Number.isFinite(s.elapsedTotalMs)) return Math.round(s.elapsedTotalMs);
-  const correct = (s?.correct ?? p.correct ?? 0) as number;
-  const avg = (s?.elapsedMs ?? p.elapsedMs ?? Number.POSITIVE_INFINITY) as number;
-  if (!Number.isFinite(avg) || correct <= 0) return null;
-  return Math.round(avg * correct);
 }
 
 function mapPlayers(arr: any[]): PlayerLite[] {
@@ -126,11 +123,15 @@ function mapPlayers(arr: any[]): PlayerLite[] {
       role: (p.role as PlayerLite["role"]) ?? "PLAYER",
       lives: p.lives ?? null,
       eliminatedAt: p.eliminatedAt ?? null,
+
+      // NEW:
+      isFinished: !!p.isFinished,
+      finishedAt: p.finishedAt ?? null,
     }))
     .filter((p: PlayerLite) => !!p.id);
 }
 
-/** Send cookies + optional bearer (for non-SSE fetches) */
+/** Auth headers helper */
 function getAuthInit(): RequestInit {
   let headers: HeadersInit = {};
   try {
@@ -144,7 +145,7 @@ function getAuthInit(): RequestInit {
   return { credentials: "include", headers };
 }
 
-/** Identity helpers — SAME contract as the lobby */
+/** Identity helpers */
 function getSignedInUserId(): string | null {
   try {
     const raw = localStorage.getItem(SESSION_KEY);
@@ -167,7 +168,7 @@ function getStableGuestName(): string {
   return name;
 }
 
-/** Single top-level Background component */
+/** Background */
 function BgDots() {
   return (
     <div
@@ -183,16 +184,35 @@ function BgDots() {
   );
 }
 
-/** Rank players for leaderboard — include everyone */
+/** Conservative roster check: someone is still actively playing? */
+function rosterSaysSomeoneStillPlaying(players: PlayerLite[]): boolean {
+  return players.some((p) => {
+    if (p.role === "SPECTATOR") return false;
+    const alive = p.lives == null || p.lives > 0;
+    const hasResult = (p.stats?.correct ?? p.correct ?? 0) > 0 || (p.score ?? 0) > 0;
+    const finished = !!p.isFinished || !!p.eliminatedAt || (p.lives != null && p.lives <= 0);
+    return alive && !finished && !hasResult; // conservative
+  });
+}
+
+/** Rank players & compute total time */
 function rankPlayersForArena(players: PlayerLite[]) {
   const rows = players.map((p) => {
     const correct = (p.stats?.correct ?? p.correct ?? 0) as number;
     const score = (p.score ?? 0) as number;
     const avg = (p.stats?.elapsedMs ?? p.elapsedMs ?? Number.POSITIVE_INFINITY) as number;
-    const total = totalTimeFrom(p); // real total from server when available
+
+    const countForTotal = correct > 0 ? correct : (Number.isFinite(score) ? (score as number) : 0);
+    const total =
+      typeof p.stats?.elapsedTotalMs === "number"
+        ? p.stats.elapsedTotalMs
+        : Number.isFinite(avg) && countForTotal > 0
+        ? Math.round(avg * countForTotal)
+        : null;
+
     return {
       id: p.id,
-      name: preferredName(p.displayName ?? null, p.username ?? null),
+      name: normalizeName(p.username ?? null, p.displayName ?? null),
       avatar: extractAvatarSrc(p.avatar ?? null),
       correct,
       score,
@@ -201,17 +221,18 @@ function rankPlayersForArena(players: PlayerLite[]) {
     };
   });
 
-  // Everyone is included; order still favors correct/score then avg time
-  return rows.sort((a, b) => {
-    const aPrimary = a.correct || a.score;
-    const bPrimary = b.correct || b.score;
-    if (aPrimary !== bPrimary) return bPrimary - aPrimary;
-    if (a.avg !== b.avg) return a.avg - b.avg;
-    return a.id.localeCompare(b.id);
-  });
+  return rows
+    .filter((r) => r.correct > 0 || r.score > 0)
+    .sort((a, b) => {
+      const aPrimary = a.correct || a.score;
+      const bPrimary = b.correct || b.score;
+      if (aPrimary !== bPrimary) return bPrimary - aPrimary;
+      if (a.avg !== b.avg) return a.avg - b.avg;
+      return a.id.localeCompare(b.id);
+    });
 }
 
-/** Avatar circle */
+/** Avatar */
 function AvatarCircle({ name, src, size = AVATAR_SIZE }: { name?: string | null; src?: string | null; size?: number }) {
   const [err, setErr] = useState(false);
   const initials =
@@ -274,20 +295,16 @@ export default function ArenaPage() {
   const [timeoutReveal, setTimeoutReveal] = useState(false);
 
   const [players, setPlayers] = useState<PlayerLite[]>([]);
-  const [lastEvt, setLastEvt] = useState<string>("—");
   const [sseConnected, setSseConnected] = useState(false);
   const gotRosterRef = useRef(false);
 
-  // Store my playerId from join (used to bump score on correct)
   const [myPlayerId, setMyPlayerId] = useState<string | null>(null);
-  const pendingScoreRef = useRef(0);
 
-  // Optional: leader info from server/SSE
   const [leaderIdServer, setLeaderIdServer] = useState<string | null>(null);
   const [leaderNameServer, setLeaderNameServer] = useState<string | null>(null);
   const [leaderAvatarServer, setLeaderAvatarServer] = useState<string | null>(null);
 
-  // Optional: “everyone finished” from SSE
+  // server hint that everyone is done
   const [everyoneDone, setEveryoneDone] = useState(false);
 
   const finished = idx >= questions.length;
@@ -442,7 +459,7 @@ export default function ArenaPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code]);
 
-  /** Polling until roster present */
+  /** Poll until roster seen at least once */
   const pollRef = useRef<NodeJS.Timeout | null>(null);
   useEffect(() => {
     if (!session?.id) return;
@@ -454,6 +471,7 @@ export default function ArenaPage() {
         if (fresh.length) {
           setPlayers(fresh);
           gotRosterRef.current = true;
+          if (rosterSaysSomeoneStillPlaying(fresh)) setEveryoneDone(false);
         }
       };
       poll();
@@ -474,50 +492,54 @@ export default function ArenaPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.id, players.length]);
 
-  /** SSE (roster + leader + all-finished) */
+  /** SSE: roster, leader, guarded all-finished */
   useEffect(() => {
     if (!session?.id) return;
 
     let es: EventSource | null = null;
-    try { es = new EventSource(`/api/duels/${code}/sse`, { withCredentials: true }); } catch { return; }
+    try {
+      es = new EventSource(`/api/duels/${code}/sse`, { withCredentials: true });
+    } catch {
+      return;
+    }
 
-    es.onopen = () => { setSseConnected(true); setLastEvt("open"); };
-    es.onerror = () => { setSseConnected(false); setLastEvt("error"); };
+    es.onopen = () => setSseConnected(true);
+    es.onerror = () => setSseConnected(false);
     es.onmessage = (evt) => {
       if (!evt.data) return;
       try {
         const data = JSON.parse(evt.data);
         const type = data?.type ?? data?.kind ?? data?.event ?? "message";
-        setLastEvt(String(type));
 
         if ((type === "lobby-state" || type === "lobby:update") && data?.session?.players) {
           const mapped = mapPlayers(data.session.players);
-          if (DEBUG) {
-            console.log("[SSE lobby-state] players:", mapped.map(p => ({
-              id: p.id, name: p.displayName || p.username, score: p.score, correct: p.stats?.correct
-            })));
-          }
           setPlayers(mapped);
           if (mapped.length) gotRosterRef.current = true;
-        } else if (type === "hb") {
-          if (!gotRosterRef.current) {
-            loadPlayersFromAPIs().then((fresh) => {
-              if (fresh.length) { setPlayers(fresh); gotRosterRef.current = true; }
-            });
+          if (rosterSaysSomeoneStillPlaying(mapped)) setEveryoneDone(false);
+          if (data?.session?.status) {
+            setSession((s) => (s ? { ...s, status: data.session.status } : s));
           }
         } else if (type === "leader" || type === "arena:leader") {
-          if (data.leaderId) setLeaderIdServer(String(data.leaderId)); else setLeaderIdServer(null);
+          if (data.leaderId) setLeaderIdServer(String(data.leaderId));
+          else setLeaderIdServer(null);
           setLeaderNameServer(
-            preferredName(data.leaderName ?? null, data.leaderUsername ?? null)
+            normalizeName(data.leaderUsername ?? data.leaderName ?? null, data.leaderUsername ?? null)
           );
           setLeaderAvatarServer(data.leaderAvatar ?? null);
         } else if (type === "all-finished") {
-          setEveryoneDone(true);
+          // (guard by sessionId if provided)
+          const ok = !data.sessionId || !session?.id || String(data.sessionId) === String(session.id);
+          if (ok) setEveryoneDone(!!data.allFinished);
         }
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     };
 
-    return () => { setSseConnected(false); try { es?.close(); } catch {} };
+    return () => {
+      setSseConnected(false);
+      try { es?.close(); } catch {}
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.id, code]);
 
@@ -528,49 +550,17 @@ export default function ArenaPage() {
     return `${qNo} / ${questions.length}`;
   }, [idx, questions.length]);
 
-  /** Score bump on correct — queue + optimistic update */
-  async function postScore(delta: number) {
+  async function addScore(delta = 1) {
     if (!myPlayerId) return;
-    const payload = { playerId: myPlayerId, delta };
     try {
-      const res = await fetch(`/api/duels/${encodeURIComponent(String(code))}/score`, {
+      await fetch(`/api/duels/${encodeURIComponent(String(code))}/score`, {
         method: "POST",
         ...getAuthInit(),
         headers: { "Content-Type": "application/json", ...(getAuthInit().headers || {}) },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ playerId: myPlayerId, delta }),
       });
-      const j = await res.json().catch(() => ({} as any));
-      if (DEBUG) console.log("[SCORE→]", payload, "ok:", res.ok, j);
-    } catch (e) {
-      if (DEBUG) console.warn("[SCORE ERR]", e);
-    }
+    } catch {}
   }
-  function addScore(delta = 1) {
-    // optimistic local bump for instant feedback (SSE will reconcile)
-    if (myPlayerId) {
-      setPlayers(prev => prev.map(p => p.id === myPlayerId ? { ...p, score: (p.score ?? 0) + delta } : p));
-    }
-
-    if (!myPlayerId) {
-      pendingScoreRef.current += delta;
-      if (DEBUG) console.log("[SCORE QUEUED]", delta, "pending:", pendingScoreRef.current);
-      return;
-    }
-    if (DEBUG) console.log("[SCORE NOW]", delta, "playerId:", myPlayerId);
-    postScore(delta);
-  }
-  // flush queued points once join returns
-  useEffect(() => {
-    if (!myPlayerId) return;
-    const queued = pendingScoreRef.current;
-    if (queued > 0) {
-      if (DEBUG) console.log("[SCORE FLUSH]", queued, "playerId:", myPlayerId);
-      postScore(queued).finally(() => {
-        pendingScoreRef.current = 0;
-      });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [myPlayerId]);
 
   function onSelect(choiceId: string) {
     if (reveal || finished) return;
@@ -617,6 +607,18 @@ export default function ArenaPage() {
     return () => clearInterval(id);
   }, [reveal, finished, idx]);
 
+  /** Fire once when this player completes their local questions */
+  const postedFinishRef = useRef(false);
+  useEffect(() => {
+    if (!finished || postedFinishRef.current || !myPlayerId) return;
+    postedFinishRef.current = true;
+    fetch(`/api/duels/${encodeURIComponent(String(code))}/finish`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ playerId: myPlayerId }),
+    }).catch(() => {});
+  }, [finished, myPlayerId, code]);
+
   /** Shadows */
   const edgeShadowStyle: React.CSSProperties = {
     filter: "drop-shadow(3px 3px 0 rgba(0,0,0,0.22)) drop-shadow(12px 16px 22px rgba(0,0,0,0.10))",
@@ -631,7 +633,7 @@ export default function ArenaPage() {
     [session, loading, questions.length, finished]
   );
 
-  /** Compute provisional leader from client-known stats */
+  /** Leader (server-preferred, else client-computed if real stats exist) */
   const leaderFromPlayers = useMemo(() => {
     if (!players.length) return null;
 
@@ -684,25 +686,17 @@ export default function ArenaPage() {
     [leaderId, players]
   );
   const leaderName =
-    leaderNameServer ?? preferredName(leaderPlayer?.displayName ?? null, leaderPlayer?.username ?? null);
+    leaderNameServer ?? normalizeName(leaderPlayer?.username ?? null, leaderPlayer?.displayName ?? null);
   const leaderAvatar =
     leaderAvatarServer ?? (leaderPlayer ? extractAvatarSrc(leaderPlayer.avatar ?? null) : null);
 
-  // Leaderboard + flags
   const leaderboard = useMemo(() => rankPlayersForArena(players), [players]);
+  const isFinalSession = session?.status === "ENDED" || session?.status === "CANCELLED";
 
-  // “Everyone done” heuristic (in case SSE didn't send all-finished)
-  const allPlayersDone = useMemo(() => {
-    const active = players.filter((p) => p.role !== "SPECTATOR");
-    if (!active.length) return false;
-    return active.every((p) => {
-      const hasResult = (p.stats?.correct ?? p.correct ?? 0) > 0 || (p.score ?? 0) > 0;
-      const out = (p.lives != null && p.lives <= 0) || !!p.eliminatedAt;
-      return hasResult || out;
-    });
-  }, [players]);
-
-  const isFinal = everyoneDone || allPlayersDone || session?.status === "ENDED" || session?.status === "CANCELLED";
+  /** Only show Final when: session ended OR server says all-finished,
+   * and roster doesn't contradict it (defensive).
+   */
+  const finalReady = (isFinalSession || everyoneDone) && !rosterSaysSomeoneStillPlaying(players);
 
   /** Render */
   if (loading) {
@@ -730,7 +724,7 @@ export default function ArenaPage() {
           <div className="max-w-md rounded-2xl border border-red-400/30 bg-red-500/10 p-7 text-center">
             <h2 className="mb-2 text-xl font-bold text-white">Session not found</h2>
             <p className="text-sm text-white/80">
-              I couldn’t locate a duel session for code <span className="font-mono">{String(code)}</span>. Ensure the session API returns <code>setId</code>, or pass <code>?setId=</code> in the URL.
+              Couldn’t locate a duel session for code <span className="font-mono">{String(code)}</span>.
             </p>
           </div>
         </div>
@@ -746,16 +740,10 @@ export default function ArenaPage() {
           <div className="max-w-md rounded-2xl border-[3px] border-white bg-[#eae9f0] p-7 text-center">
             <h2 className="mb-2 text-xl font-bold text-[#716c76]">No cards in set</h2>
             <p className="text-sm text-[#716c76] font-medium">
-              This set produced no usable term/definition pairs. Check your set content or the
-              term/definition field names returned by the API.
+              This set produced no usable term/definition pairs.
             </p>
           </div>
         </div>
-        {DEBUG && (
-          <div className="fixed bottom-2 left-2 z-20 rounded bg-black/60 px-2 py-1 text-[11px] text-white/85">
-            debug · questions: {questions.length} · idx: {idx}
-          </div>
-        )}
       </div>
     );
   }
@@ -801,12 +789,12 @@ export default function ArenaPage() {
         </div>
       </div>
 
-      {/* Players column — leader first */}
+      {/* Players column (leader first) */}
       <div className="fixed right-3 z-20 flex flex-col items-end gap-3 pt-5" style={{ top: "96px" }}>
         {playersOrdered.map((p, i) => {
           const isLeader = !!leaderId && p.id === leaderId && i === 0;
           const size = isLeader ? LEADER_SIZE : AVATAR_SIZE;
-          const label = preferredName(p.displayName ?? null, p.username ?? null);
+          const label = normalizeName(p.username ?? null, p.displayName ?? null);
 
           return (
             <div key={p.id} className="flex items-center gap-2">
@@ -829,24 +817,7 @@ export default function ArenaPage() {
         })}
       </div>
 
-      {/* Debug overlay (dev only) */}
-      {DEBUG && (
-        <div className="fixed bottom-2 right-2 z-20 rounded bg-black/60 px-2 py-1 text-[11px] text-white/85 space-y-1 max-w-[42vw]">
-          <div>
-            players:{players.length} {sseConnected ? "(sse)" : "(poll)"} · last:{lastEvt} ·
-            myId:{myPlayerId ? "yes" : "no"} · queued:{pendingScoreRef.current} ·
-            finished:{String(finished)} · isFinal:{String(isFinal)}
-          </div>
-          <div>lb rows:{leaderboard.length}</div>
-          <div className="max-h-[22vh] overflow-auto whitespace-pre leading-tight">
-            {players.map(p =>
-              `${preferredName(p.displayName,p.username)}  s:${p.score||0}  c:${p.stats?.correct||0}  total:${fmtMs(totalTimeFrom(p) ?? undefined)}`
-            ).join("\n")}
-          </div>
-        </div>
-      )}
-
-      {/* Center title pill */}
+      {/* Set title pill */}
       <div className="fixed left-1/2 top-5 z-20 -translate-x-1/2">
         <div
           className={`${continuum.className} flex h-[54px] items-center rounded-[34px] border-[3px] border-white bg-[#eae9f0] px-8`}
@@ -945,64 +916,70 @@ export default function ArenaPage() {
               )}
             </AnimatePresence>
 
-            {/* Results / Leaderboard after user finishes */}
+            {/* Results / Leaderboard */}
             {finished && (
               <motion.div
                 initial={{ opacity: 0, y: 10, scale: 0.98 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
-                className="mx-auto w-full max-w-2xl rounded-[22px] border-[3px] border-white bg-[#eae9f0] p-6 md:p-7"
-                style={edgeShadowStyle}
+                className="mx-auto w-full max-w-2xl"
               >
-                <div className="mb-3 flex items-center justify-between">
-                  <div className="text-xl font-bold text-[#716c76]">
-                    {isFinal ? "Final leaderboard" : "Waiting for others…"}
-                  </div>
-                  {!isFinal && (
-                    <div className="text-sm text-[#716c76] font-medium">Live leaderboard</div>
-                  )}
-                </div>
-
-                {leaderboard.length ? (
-                  <div className="mt-2 space-y-2">
-                    {leaderboard.map((r, i) => {
-                      const rank = i + 1;
-                      const isPodium = rank <= 3;
-                      const size = isPodium && rank === 1 ? 56 : 44;
-                      const medal =
-                        rank === 1 ? "🥇" :
-                        rank === 2 ? "🥈" :
-                        rank === 3 ? "🥉" : String(rank);
-
-                      return (
-                        <div
-                          key={r.id}
-                          className="flex items-center justify-between rounded-xl border-[3px] border-white bg-white/50 px-3 py-2"
-                        >
-                          <div className="flex items-center gap-3">
-                            <div className="w-6 text-center text-lg">{medal}</div>
-                            <AvatarCircle name={r.name} src={r.avatar} size={size} />
-                            <div className="ml-1">
-                              <div className="text-[15px] text-[#716c76] font-bold">{r.name}</div>
-                              <div className="text-xs text-[#716c76]/70 font-medium">
-                                Total time: {fmtMs(r.total ?? undefined)}
-                              </div>
-                            </div>
-                          </div>
-                          <div className="text-right">
-                            <div className="text-[15px] font-bold text-[#716c76]">
-                              {r.correct > 0 ? `${r.correct}` : `${r.score ?? 0}`}
-                            </div>
-                            <div className="text-xs text-[#716c76]/70 font-medium">
-                              {r.correct > 0 ? "correct" : "points"}
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
+                {!finalReady ? (
+                  <div
+                    className="rounded-[22px] border-[3px] border-white bg-[#eae9f0] p-6 md:p-7 text-[#716c76]"
+                    style={edgeShadowStyle}
+                  >
+                    <div className="text-xl font-bold">Waiting for all players to finish…</div>
                   </div>
                 ) : (
-                  <div className="mt-1 rounded-xl border-[3px] border-white bg-white/40 px-4 py-4 text-center text-[#716c76] font-medium">
-                    {isFinal ? "Nobody answered correctly." : "No results yet. Waiting for first correct…"}
+                  <div
+                    className="rounded-[22px] border-[3px] border-white bg-[#eae9f0] p-6 md:p-7"
+                    style={edgeShadowStyle}
+                  >
+                    <div className="mb-3 flex items-center justify-between">
+                      <div className="text-xl font-bold text-[#716c76]">Final leaderboard</div>
+                    </div>
+
+                    {leaderboard.length ? (
+                      <div className="mt-2 space-y-2">
+                        {leaderboard.map((r, i) => {
+                          const rank = i + 1;
+                          const isPodium = rank <= 3;
+                          const size = isPodium && rank === 1 ? 56 : 44;
+                          const medal =
+                            rank === 1 ? "🥇" : rank === 2 ? "🥈" : rank === 3 ? "🥉" : String(rank);
+
+                          return (
+                            <div
+                              key={r.id}
+                              className="flex items-center justify-between rounded-xl border-[3px] border-white bg-white/50 px-3 py-2"
+                            >
+                              <div className="flex items-center gap-3">
+                                <div className="w-6 text-center text-lg">{medal}</div>
+                                <AvatarCircle name={r.name} src={r.avatar} size={size} />
+                                <div className="ml-1">
+                                  <div className="text-[15px] text-[#716c76] font-bold">{r.name}</div>
+                                  <div className="text-xs text-[#716c76]/70 font-medium">
+                                    Total time: {fmtMs(r.total)}
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <div className="text-[15px] font-bold text-[#716c76]">
+                                  {r.correct > 0 ? `${r.correct}` : `${r.score}`}
+                                </div>
+                                <div className="text-xs text-[#716c76]/70 font-medium">
+                                  {r.correct > 0 ? "correct" : "points"}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="mt-1 rounded-xl border-[3px] border-white bg-white/40 px-4 py-4 text-center text-[#716c76] font-medium">
+                        Nobody answered correctly.
+                      </div>
+                    )}
                   </div>
                 )}
               </motion.div>
