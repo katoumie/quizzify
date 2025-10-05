@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { continuum } from "@/app/fonts";
+import ArenaBGM from "@/components/ArenaBGM";
 
 /** --- Types --- */
 type Card = { id: string; term: string; definition: string; skill?: string | null };
@@ -43,7 +44,7 @@ function buildQuestions(cards: Card[]): BuiltQ[] {
 /** --- Chip --- */
 function Chip({ children }: { children: React.ReactNode }) {
   return (
-    <span className="inline-flex items-center rounded-full border border-white/20 bg-white/5 px-2 py-0.5 text-[12px] leading-none text-white/85">
+    <span className="inline-flex items-center rounded-full border border-white/20 bg-white/5 px-2.5 py-1 text-[13px] leading-none text-white/85">
       {children}
     </span>
   );
@@ -63,8 +64,12 @@ export default function ArenaPage() {
   const [selected, setSelected] = useState<string | null>(null);
   const [reveal, setReveal] = useState(false);
 
-  const current = questions[idx];
+  // Timer + timeout state
+  const [timerSec, setTimerSec] = useState(10);
+  const [timeoutReveal, setTimeoutReveal] = useState(false);
+
   const finished = idx >= questions.length;
+  const current = !finished ? questions[idx] : undefined;
 
   /** Fetch helpers */
   async function loadSession(): Promise<DuelSessionLite | null> {
@@ -129,6 +134,8 @@ export default function ArenaPage() {
       setIdx(0);
       setSelected(null);
       setReveal(false);
+      setTimerSec(10);
+      setTimeoutReveal(false);
       setLoading(false);
     })();
 
@@ -138,22 +145,55 @@ export default function ArenaPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code]);
 
+  /** ---- Progress text (used by pill) ---- */
   const progressText = useMemo(() => {
     if (!questions.length) return "0 / 0";
-    return `${idx + 1} / ${questions.length}`;
+    const qNo = Math.min(idx + 1, Math.max(1, questions.length));
+    return `${qNo} / ${questions.length}`;
   }, [idx, questions.length]);
 
   function onSelect(choiceId: string) {
-    if (reveal) return; // lock after reveal
+    if (reveal || finished) return; // lock after reveal or on finish
     setSelected(choiceId);
-    setReveal(true);
+    setReveal(true); // timer stops because reveal is true
   }
 
-  function next() {
-    setSelected(null);
-    setReveal(false);
-    setIdx((i) => Math.min(i + 1, Math.max(0, questions.length - 1)));
-  }
+  /** Auto-advance 2s after reveal (answer or timeout) */
+  useEffect(() => {
+    if (!reveal || finished) return;
+    const t = setTimeout(() => {
+      setSelected(null);
+      setReveal(false);
+      setTimeoutReveal(false);
+      setIdx((i) => i + 1); // may flip to finished
+      setTimerSec(10);
+    }, 2000);
+    return () => clearTimeout(t);
+  }, [reveal, finished]);
+
+  /** Reset timer on new index */
+  useEffect(() => {
+    setTimerSec(10);
+    setTimeoutReveal(false);
+  }, [idx]);
+
+  /** Countdown: runs only when not revealing and not finished */
+  useEffect(() => {
+    if (finished || reveal) return;
+    const id = setInterval(() => {
+      setTimerSec((t) => {
+        if (t <= 1) {
+          clearInterval(id);
+          // Timeout: reveal correct answer with RED outline (not green)
+          setTimeoutReveal(true);
+          setReveal(true);
+          return 0;
+        }
+        return t - 1;
+      });
+    }, 1000);
+    return () => clearInterval(id);
+  }, [reveal, finished, idx]);
 
   /** ---- Full-bleed gray polkadot background ---- */
   const BgDots = () => (
@@ -161,7 +201,7 @@ export default function ArenaPage() {
       className="pointer-events-none fixed inset-0 z-0"
       style={{
         backgroundImage:
-          "radial-gradient(rgba(0,0,0,0.10) 0.8px, transparent 0.8px), linear-gradient(to bottom, #f7f8fb 0%, #f7f8fb 52%, #c9cdd5 100%)",
+          "radial-gradient(rgba(0,0,0,0.10) 0.9px, transparent 0.9px), linear-gradient(to bottom, #f7f8fb 0%, #f7f8fb 52%, #c9cdd5 100%)",
         backgroundSize: "12px 12px, 100% 100%",
         backgroundPosition: "0 0, 0 0",
         backgroundColor: "#f7f8fb",
@@ -169,11 +209,23 @@ export default function ArenaPage() {
     />
   );
 
-  /** Edge-hugging shadow: diagonal rim (no corner double-dark) + soft ambient */
+  /** Edge-hugging shadow: diagonal rim (no corner double-dark) + soft ambient (cards) */
   const edgeShadowStyle: React.CSSProperties = {
     filter:
       "drop-shadow(3px 3px 0 rgba(0,0,0,0.22)) drop-shadow(12px 16px 22px rgba(0,0,0,0.10))",
   };
+
+  /** Lighter variant for the top-left/right pills */
+  const pillShadowStyle: React.CSSProperties = {
+    filter:
+      "drop-shadow(2px 2px 0 rgba(0,0,0,0.14)) drop-shadow(10px 12px 20px rgba(0,0,0,0.08))",
+  };
+
+  /** ---- BGM active condition ---- */
+  const bgmActive = useMemo(
+    () => !!session && session.status === "RUNNING" && !loading && questions.length > 0 && !finished,
+    [session, loading, questions.length, finished]
+  );
 
   /** --- Render --- */
   if (loading) {
@@ -184,7 +236,7 @@ export default function ArenaPage() {
           <motion.div
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="rounded-2xl border border-white/15 bg-white/5 px-6 py-4 text-white/80"
+            className="rounded-2xl border border-white/15 bg-white/5 px-7 py-5 text-[15px] text-white/80"
           >
             Loading arena…
           </motion.div>
@@ -198,8 +250,8 @@ export default function ArenaPage() {
       <div className={`${continuum.className} relative h-full`}>
         <BgDots />
         <div className="relative z-10 flex h-full items-center justify-center">
-          <div className="max-w-md rounded-2xl border border-red-400/30 bg-red-500/10 p-6 text-center">
-            <h2 className="mb-2 text-lg font-semibold text-white">Session not found</h2>
+          <div className="max-w-md rounded-2xl border border-red-400/30 bg-red-500/10 p-7 text-center">
+            <h2 className="mb-2 text-xl font-semibold text-white">Session not found</h2>
             <p className="text-sm text-white/80">
               I couldn’t locate a duel session for code <span className="font-mono">{String(code)}</span>.{" "}
               Ensure the session API returns <code>setId</code>, or pass <code>?setId=</code> in the URL.
@@ -215,8 +267,8 @@ export default function ArenaPage() {
       <div className={`${continuum.className} relative h-full`}>
         <BgDots />
         <div className="relative z-10 flex h-full items-center justify-center">
-          <div className="max-w-md rounded-2xl border border-yellow-400/30 bg-yellow-500/10 p-6 text-center">
-            <h2 className="mb-2 text-lg font-semibold text-white">No cards in set</h2>
+          <div className="max-w-md rounded-2xl border border-yellow-400/30 bg-yellow-500/10 p-7 text-center">
+            <h2 className="mb-2 text-xl font-semibold text-white">No cards in set</h2>
             <p className="text-sm text-white/80">
               The selected set has no usable term/definition pairs. Add cards then reload.
             </p>
@@ -229,17 +281,42 @@ export default function ArenaPage() {
   return (
     <>
       <BgDots />
+      {/* Looping BGM when the game is actually running */}
+      <ArenaBGM active={bgmActive} />
 
-      <div className={`${continuum.className} relative z-10 mx-auto flex h-full w-full max-w-5xl flex-col px-4 py-6`}>
+      {/* Top-left progress pill */}
+      <div className="fixed left-5 top-5 z-20">
+        <div
+          className={`${continuum.className} rounded-[34px] border-[3px] border-[#716c76] bg-[#eae9f0] px-5 py-2`}
+          style={pillShadowStyle}
+        >
+          <div className="text-[18px] font-bold tracking-tight text-[#716c76]">{progressText}</div>
+        </div>
+      </div>
+
+      {/* Top-right timer pill */}
+      <div className="fixed right-5 top-5 z-20">
+        <div
+          className="rounded-[34px] border-[3px] border-[#716c76] bg-[#eae9f0] px-5 py-2 flex items-center gap-2"
+          style={pillShadowStyle}
+        >
+          <img src="/icons/timer.svg" alt="" className="h-5 w-5 select-none" />
+          <div className={`${continuum.className} text-[18px] font-bold leading-none text-[#716c76]`}>
+            {timerSec}
+          </div>
+        </div>
+      </div>
+
+      <div className={`${continuum.className} relative z-10 mx-auto flex h-full w-full max-w-5xl flex-col px-5 py-7`}>
         {/* Top bar */}
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
+        <div className="mb-5 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-2.5">
             <Chip>Code: {session.code}</Chip>
             <Chip>Set</Chip>
           </div>
           <div className="text-right">
-            <div className="text-sm text-white/70">{setData.title ?? setData.name ?? "Study Set"}</div>
-            <div className="text-xs text-white/50">{progressText}</div>
+            <div className="text-[15px] text-white/70">{setData.title ?? setData.name ?? "Study Set"}</div>
+            {/* Progress moved to the top-left pill */}
           </div>
         </div>
 
@@ -254,27 +331,34 @@ export default function ArenaPage() {
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   exit={{ opacity: 0, y: -16, scale: 0.98 }}
                   transition={{ duration: 0.22 }}
-                  className="relative mx-auto max-w-3xl"
+                  className="relative mx-auto max-w-4xl"
                 >
                   {/* TERM card */}
                   <div
-                    className="rounded-[22px] border-[3px] border-white bg-[#eae9f0] p-5"
+                    className="rounded-[22px] border-[3px] border-white bg-[#eae9f0] p-6 md:p-7"
                     style={edgeShadowStyle}
                   >
-                    <div className="mb-3 text-xs uppercase tracking-wide text-[#716c76] font-bold">Term</div>
-                    <div className="text-balance text-[28px] leading-snug md:text-[32px] text-[#716c76] font-bold">
+                    <div className="mb-3.5 text-sm uppercase tracking-wide text-[#716c76] font-bold">Term</div>
+                    <div className="text-balance text-[32px] leading-snug md:text-[38px] text-[#716c76] font-bold">
                       {current.term}
                     </div>
                   </div>
 
                   {/* Choices */}
-                  <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
                     {current.choices.map((c) => {
                       const isSelected = selected === c.id;
                       const isCorrect = c.isCorrect;
 
+                      // Reveal logic:
+                      // - Normal reveal: correct -> green outline; user's wrong pick -> red
+                      // - Timeout reveal: correct -> RED outline (special rule), others -> no outline
                       const revealOutline = reveal
-                        ? isCorrect
+                        ? timeoutReveal
+                          ? isCorrect
+                            ? "outline outline-2 outline-rose-400"
+                            : ""
+                          : isCorrect
                           ? "outline outline-2 outline-emerald-400"
                           : isSelected
                           ? "outline outline-2 outline-rose-400"
@@ -286,11 +370,11 @@ export default function ArenaPage() {
                           key={c.id}
                           disabled={reveal}
                           onClick={() => onSelect(c.id)}
-                          className={`group rounded-[22px] border-[3px] border-white bg-[#eae9f0] px-4 py-4 text-left transition hover:brightness-[1.02] ${revealOutline}`}
+                          className={`group rounded-[22px] border-[3px] border-white bg-[#eae9f0] px-5 py-5 text-left transition hover:brightness-[1.02] ${revealOutline}`}
                           style={edgeShadowStyle}
                         >
-                          <div className="text-[12px] uppercase tracking-wide text-[#716c76] font-bold">Answer</div>
-                          <div className="mt-1 text-base leading-snug md:text-[17px] text-[#716c76] font-medium">
+                          <div className="text-[13px] uppercase tracking-wide text-[#716c76] font-bold">Answer</div>
+                          <div className="mt-1.5 text-[18px] leading-snug md:text-[19px] text-[#716c76] font-medium">
                             {c.text}
                           </div>
 
@@ -299,7 +383,7 @@ export default function ArenaPage() {
                             className="pointer-events-none absolute inset-0 rounded-[22px] opacity-0 transition group-hover:opacity-100"
                             style={{
                               background:
-                                "radial-gradient(140px 70px at 20% 0%, rgba(255,255,255,0.25), rgba(255,255,255,0))",
+                                "radial-gradient(160px 80px at 20% 0%, rgba(255,255,255,0.25), rgba(255,255,255,0))",
                             }}
                           />
                         </button>
@@ -307,15 +391,15 @@ export default function ArenaPage() {
                     })}
                   </div>
 
-                  {/* Footer */}
-                  <div className="mt-5 flex items-center justify-between">
-                    <div className="text-sm text-[#716c76]">
+                  {/* Footer (status only; auto-advances after 2s) */}
+                  <div className="mt-6 flex items-center justify-between">
+                    <div className="text-[15px] text-[#716c76]">
                       {reveal ? (
                         current.choices.find((c) => c.isCorrect)?.id === selected ? (
-                          <span className="text-emerald-600 font-medium">Correct!</span>
+                          <span className="text-emerald-600 font-semibold">Correct!</span>
                         ) : (
                           <>
-                            <span className="text-rose-600 font-medium">Wrong.</span>{" "}
+                            <span className="text-rose-600 font-semibold">Wrong.</span>{" "}
                             <span className="text-[#716c76]">Correct: {current.correctDefinition}</span>
                           </>
                         )
@@ -323,14 +407,9 @@ export default function ArenaPage() {
                         <span>Select an answer.</span>
                       )}
                     </div>
-
-                    <button
-                      onClick={next}
-                      disabled={!reveal}
-                      className="rounded-full bg-[#532e95] px-10 py-2 text-sm font-medium text-white ring-1 ring-white/20 transition disabled:cursor-not-allowed disabled:opacity-50 hover:bg-[#5d38a6] min-w-[140px]"
-                    >
-                      {idx + 1 < questions.length ? "Next" : "Finish"}
-                    </button>
+                    <div className="text-sm text-[#716c76]/70">
+                      {reveal ? "Advancing…" : `Time left: ${timerSec}s`}
+                    </div>
                   </div>
                 </motion.div>
               )}
@@ -340,11 +419,11 @@ export default function ArenaPage() {
               <motion.div
                 initial={{ opacity: 0, y: 10, scale: 0.98 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
-                className="mx-auto max-w-md rounded-[22px] border-[3px] border-white bg-[#eae9f0] p-6 text-center"
+                className="mx-auto max-w-lg rounded-[22px] border-[3px] border-white bg-[#eae9f0] p-7 text-center"
                 style={edgeShadowStyle}
               >
-                <div className="mb-2 text-lg font-bold text-[#716c76]">Great run!</div>
-                <div className="text-sm text-[#716c76]">You’ve reached the end of this set preview.</div>
+                <div className="mb-2 text-xl font-bold text-[#716c76]">Great run!</div>
+                <div className="text-[15px] text-[#716c76]">You’ve reached the end of this set preview.</div>
               </motion.div>
             )}
           </div>
