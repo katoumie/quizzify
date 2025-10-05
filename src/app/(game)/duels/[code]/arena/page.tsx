@@ -33,10 +33,8 @@ type PlayerLite = {
   score?: number;
 
   role?: "PLAYER" | "SPECTATOR";
-  lives?: number | null;
-  eliminatedAt?: string | null;
 
-  // NEW:
+  // explicit finish flags (fed from SSE/API)
   isFinished?: boolean;
   finishedAt?: string | null;
 };
@@ -121,10 +119,7 @@ function mapPlayers(arr: any[]): PlayerLite[] {
       score: p.score ?? undefined,
 
       role: (p.role as PlayerLite["role"]) ?? "PLAYER",
-      lives: p.lives ?? null,
-      eliminatedAt: p.eliminatedAt ?? null,
 
-      // NEW:
       isFinished: !!p.isFinished,
       finishedAt: p.finishedAt ?? null,
     }))
@@ -184,14 +179,15 @@ function BgDots() {
   );
 }
 
-/** Conservative roster check: someone is still actively playing? */
-function rosterSaysSomeoneStillPlaying(players: PlayerLite[]): boolean {
+/** Treat a player as still active ONLY if:
+ * - not a spectator
+ * - NOT marked isFinished yet
+ * Score/correct does NOT imply finished.
+ */
+function someoneStillActive(players: PlayerLite[]): boolean {
   return players.some((p) => {
     if (p.role === "SPECTATOR") return false;
-    const alive = p.lives == null || p.lives > 0;
-    const hasResult = (p.stats?.correct ?? p.correct ?? 0) > 0 || (p.score ?? 0) > 0;
-    const finished = !!p.isFinished || !!p.eliminatedAt || (p.lives != null && p.lives <= 0);
-    return alive && !finished && !hasResult; // conservative
+    return !p.isFinished;
   });
 }
 
@@ -304,7 +300,7 @@ export default function ArenaPage() {
   const [leaderNameServer, setLeaderNameServer] = useState<string | null>(null);
   const [leaderAvatarServer, setLeaderAvatarServer] = useState<string | null>(null);
 
-  // server hint that everyone is done
+  // Diagnostics only; UI ignores it for final gating.
   const [everyoneDone, setEveryoneDone] = useState(false);
 
   const finished = idx >= questions.length;
@@ -325,40 +321,47 @@ export default function ArenaPage() {
       if (j?.playerId) setMyPlayerId(String(j.playerId));
     } catch {}
   }
+
+  // leave is a no-op to avoid 404s if you haven't implemented it
   async function leaveLobby() {
-    try {
-      await fetch(`/api/duels/${encodeURIComponent(String(code))}/leave`, {
-        method: "POST",
-        ...getAuthInit(),
-        headers: { "Content-Type": "application/json", ...(getAuthInit().headers || {}) },
-        body: JSON.stringify({}),
-        keepalive: true,
-      });
-    } catch {}
+    return;
   }
 
+  // hydrate from ONLY /api/duels/:code
   async function loadSession(): Promise<DuelSessionLite | null> {
-    const tryPaths = [`/api/duels/${code}`, `/api/duels/${code}/session`];
-    for (const p of tryPaths) {
-      try {
-        const r = await fetch(p, { cache: "no-store", ...getAuthInit() });
-        if (r.ok) {
-          const j = await r.json();
-          const raw = j.session ?? j;
-          const s: DuelSessionLite = {
-            id: raw?.id ?? String(code),
-            code: raw?.code ?? String(code),
-            setId: raw?.setId,
-            status: raw?.status,
-            players: raw?.players ? mapPlayers(raw.players) : undefined,
-          };
-          if (s?.id && s?.setId) return s;
-        }
-      } catch {}
+    try {
+      const r = await fetch(`/api/duels/${code}`, { cache: "no-store", ...getAuthInit() });
+      if (!r.ok) throw new Error("session fetch failed");
+      const j = await r.json();
+      const raw = j.session ?? j;
+      if (!raw?.id || !raw?.setId) return null;
+      const s: DuelSessionLite = {
+        id: raw.id,
+        code: raw.code ?? String(code),
+        setId: raw.setId,
+        status: raw.status,
+        players: raw.players ? mapPlayers(raw.players) : [],
+      };
+      return s;
+    } catch {
+      const qSetId = search.get("setId");
+      if (qSetId) return { id: "adhoc", code: String(code), setId: qSetId, status: "RUNNING" };
+      return null;
     }
-    const qSetId = search.get("setId");
-    if (qSetId) return { id: "adhoc", code: String(code), setId: qSetId, status: "RUNNING" };
-    return null;
+  }
+
+  // roster also from ONLY /api/duels/:code
+  async function loadPlayersFromAPIs(): Promise<PlayerLite[]> {
+    try {
+      const r = await fetch(`/api/duels/${code}`, { cache: "no-store", ...getAuthInit() });
+      if (!r.ok) return [];
+      const j = await r.json();
+      const raw = j.session ?? j;
+      const arr = Array.isArray(raw?.players) ? raw.players : [];
+      return mapPlayers(arr);
+    } catch {
+      return [];
+    }
   }
 
   async function loadSet(setId: string): Promise<StudySet | null> {
@@ -386,34 +389,6 @@ export default function ArenaPage() {
     }
   }
 
-  async function loadPlayersFromAPIs(): Promise<PlayerLite[]> {
-    try {
-      const r = await fetch(`/api/duels/${code}/players`, { cache: "no-store", ...getAuthInit() });
-      if (r.ok) {
-        const j = await r.json();
-        const arr = Array.isArray(j) ? j : j.players ?? [];
-        if (Array.isArray(arr) && arr.length) return mapPlayers(arr);
-      }
-    } catch {}
-    try {
-      const r = await fetch(`/api/duels/${code}`, { cache: "no-store", ...getAuthInit() });
-      if (r.ok) {
-        const j = await r.json();
-        const raw = j.session ?? j;
-        if (raw?.players?.length) return mapPlayers(raw.players);
-      }
-    } catch {}
-    try {
-      const r = await fetch(`/api/duels/${code}/session`, { cache: "no-store", ...getAuthInit() });
-      if (r.ok) {
-        const j = await r.json();
-        const raw = j.session ?? j;
-        if (raw?.players?.length) return mapPlayers(raw.players);
-      }
-    } catch {}
-    return [];
-  }
-
   /** Bootstrap */
   useEffect(() => {
     let cancel = false;
@@ -423,16 +398,17 @@ export default function ArenaPage() {
       await joinLobby();
       if (cancel) return;
 
-      const firstRoster = await loadPlayersFromAPIs().catch(() => []);
-      if (!cancel && firstRoster.length) {
-        setPlayers(firstRoster);
-        gotRosterRef.current = true;
-      }
-
+      // hydrate session (includes players)
       const s = await loadSession();
       if (cancel) return;
 
       setSession(s);
+      const firstRoster = s?.players ?? [];
+      if (firstRoster.length) {
+        setPlayers(firstRoster);
+        gotRosterRef.current = true;
+      }
+
       if (!s?.setId) {
         setLoading(false);
         return;
@@ -471,7 +447,8 @@ export default function ArenaPage() {
         if (fresh.length) {
           setPlayers(fresh);
           gotRosterRef.current = true;
-          if (rosterSaysSomeoneStillPlaying(fresh)) setEveryoneDone(false);
+          // Clear any stale "done" hints if someone still active
+          if (someoneStillActive(fresh)) setEveryoneDone(false);
         }
       };
       poll();
@@ -492,7 +469,7 @@ export default function ArenaPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.id, players.length]);
 
-  /** SSE: roster, leader, guarded all-finished */
+  /** SSE: roster & leader (we ignore all-finished for UI gating) */
   useEffect(() => {
     if (!session?.id) return;
 
@@ -515,7 +492,7 @@ export default function ArenaPage() {
           const mapped = mapPlayers(data.session.players);
           setPlayers(mapped);
           if (mapped.length) gotRosterRef.current = true;
-          if (rosterSaysSomeoneStillPlaying(mapped)) setEveryoneDone(false);
+          if (someoneStillActive(mapped)) setEveryoneDone(false);
           if (data?.session?.status) {
             setSession((s) => (s ? { ...s, status: data.session.status } : s));
           }
@@ -527,7 +504,7 @@ export default function ArenaPage() {
           );
           setLeaderAvatarServer(data.leaderAvatar ?? null);
         } else if (type === "all-finished") {
-          // (guard by sessionId if provided)
+          // Diagnostics only
           const ok = !data.sessionId || !session?.id || String(data.sessionId) === String(session.id);
           if (ok) setEveryoneDone(!!data.allFinished);
         }
@@ -564,12 +541,16 @@ export default function ArenaPage() {
 
   function onSelect(choiceId: string) {
     if (reveal || finished) return;
+
+    // Set the local visual state first → browser paints outline immediately
     setSelected(choiceId);
-
-    const isCorrect = !!current?.choices.find((c) => c.id === choiceId)?.isCorrect;
-    if (isCorrect) addScore(1);
-
     setReveal(true);
+
+    // Compute correctness AFTER flipping reveal (no visual delay)
+    const isCorrect = !!current?.choices.find((c) => c.id === choiceId)?.isCorrect;
+    if (isCorrect) {
+      void addScore(1); // fire & forget
+    }
   }
 
   /** Auto-advance after 2s */
@@ -637,7 +618,7 @@ export default function ArenaPage() {
   const leaderFromPlayers = useMemo(() => {
     if (!players.length) return null;
 
-    const active = players.filter((p) => p.role !== "SPECTATOR" && !p.eliminatedAt && (p.lives == null || p.lives > 0));
+    const active = players.filter((p) => p.role !== "SPECTATOR");
     const pool = active.length ? active : players;
 
     const best = pool
@@ -691,12 +672,18 @@ export default function ArenaPage() {
     leaderAvatarServer ?? (leaderPlayer ? extractAvatarSrc(leaderPlayer.avatar ?? null) : null);
 
   const leaderboard = useMemo(() => rankPlayersForArena(players), [players]);
-  const isFinalSession = session?.status === "ENDED" || session?.status === "CANCELLED";
 
-  /** Only show Final when: session ended OR server says all-finished,
-   * and roster doesn't contradict it (defensive).
+  /** Local, strict finalization: show Final only when
+   * - session ended/cancelled, OR
+   * - every non-spectator isFinished
    */
-  const finalReady = (isFinalSession || everyoneDone) && !rosterSaysSomeoneStillPlaying(players);
+  const isFinalSession = session?.status === "ENDED" || session?.status === "CANCELLED";
+  const allFinishedLocal = useMemo(() => {
+    const active = players.filter((p) => p.role !== "SPECTATOR");
+    if (!active.length) return false;
+    return active.every((p) => !!p.isFinished);
+  }, [players]);
+  const finalReady = isFinalSession || allFinishedLocal;
 
   /** Render */
   if (loading) {
@@ -924,6 +911,7 @@ export default function ArenaPage() {
                 className="mx-auto w-full max-w-2xl"
               >
                 {!finalReady ? (
+                  // Waiting-only card
                   <div
                     className="rounded-[22px] border-[3px] border-white bg-[#eae9f0] p-6 md:p-7 text-[#716c76]"
                     style={edgeShadowStyle}
@@ -931,6 +919,7 @@ export default function ArenaPage() {
                     <div className="text-xl font-bold">Waiting for all players to finish…</div>
                   </div>
                 ) : (
+                  // Final leaderboard
                   <div
                     className="rounded-[22px] border-[3px] border-white bg-[#eae9f0] p-6 md:p-7"
                     style={edgeShadowStyle}

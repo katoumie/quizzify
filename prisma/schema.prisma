@@ -299,7 +299,7 @@ model Response {
 
 /**
  * =========================
- * Duels (Arena / Team / Standard)
+ * Duels (Arena / Team / Standard) — simplified (no pairs/lives/bye)
  * =========================
  */
 
@@ -320,13 +320,6 @@ enum RoundState {
   PENDING
   LIVE
   RESOLVED
-}
-
-enum MatchResult {
-  A_WIN
-  B_WIN
-  BOTH_LOSE
-  BYE
 }
 
 enum DuelPlayerRole {
@@ -357,31 +350,25 @@ model DuelSession {
 }
 
 model DuelPlayer {
-  id           String      @id @default(cuid())
+  id           String         @id @default(cuid())
   sessionId    String
-  session      DuelSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  session      DuelSession    @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   userId       String?
-  user         User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  user         User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   displayName  String
-  role         DuelPlayerRole @default(PLAYER) // PLAYER or SPECTATOR (teachers, eliminated, etc.)
+  role         DuelPlayerRole @default(PLAYER) // PLAYER or SPECTATOR
 
-  // Optional / legacy fields (kept to avoid breaking UI; safe to remove later if unused)
-  team         String?         // "A" | "B" | null (unused in Arena)
-  lives        Int             @default(3)
-  score        Int             @default(0)
-  isReady      Boolean         @default(false)
-  connectedAt  DateTime        @default(now())
+  // Kept: score/ready/connection and explicit finish flags
+  score        Int            @default(0)
+  isReady      Boolean        @default(false)
+  connectedAt  DateTime       @default(now())
   lastSeenAt   DateTime?
-  eliminatedAt DateTime?
-  isFinished  Boolean  @default(false)
-  finishedAt  DateTime?
-  byeCount     Int             @default(0)
+  isFinished   Boolean        @default(false)
+  finishedAt   DateTime?
 
   // Back-refs
-  answers   DuelAnswer[]
-  pairsAsA  DuelPair[] @relation("PairA")
-  pairsAsB  DuelPair[] @relation("PairB")
+  answers      DuelAnswer[]
 
   @@index([sessionId, role])
   @@index([userId])
@@ -398,41 +385,18 @@ model DuelRound {
   startedAt      DateTime?
   endedAt        DateTime?
 
-  pairs   DuelPair[]
   answers DuelAnswer[]
 
   @@unique([sessionId, roundNo])
   @@index([sessionId, state])
 }
 
-model DuelPair {
-  id      String    @id @default(cuid())
-  roundId String
-  round   DuelRound @relation(fields: [roundId], references: [id], onDelete: Cascade)
-
-  aId String
-  a   DuelPlayer @relation("PairA", fields: [aId], references: [id], onDelete: Cascade)
-
-  bId String?     // null => BYE
-  b   DuelPlayer? @relation("PairB", fields: [bId], references: [id], onDelete: SetNull)
-
-  bye    Boolean     @default(false)
-  result MatchResult?
-
-  // Optional: store winner directly (useful for analytics/UI)
-  winnerId String?
-
-  @@index([roundId])
-  @@index([aId])
-  @@index([bId])
-}
-
 model DuelAnswer {
-  id       String     @id @default(cuid())
-  roundId  String
-  round    DuelRound  @relation(fields: [roundId], references: [id], onDelete: Cascade)
-  playerId String
-  player   DuelPlayer @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  id         String     @id @default(cuid())
+  roundId    String
+  round      DuelRound  @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  playerId   String
+  player     DuelPlayer @relation(fields: [playerId], references: [id], onDelete: Cascade)
 
   choiceIndex Int
   isCorrect   Boolean

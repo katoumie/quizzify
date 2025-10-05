@@ -1,53 +1,84 @@
 // /src/app/api/duels/[code]/start/route.ts
-export const runtime = "nodejs";
-
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { PrismaClient, DuelStatus, DuelPlayerRole } from "@prisma/client";
 
-/**
- * Start a duel session:
- * - Only the host can start.
- * - Sets status=RUNNING and startedAt=now.
- * - Records initialPlayerCount.
- */
-export async function POST(req: Request, ctx: { params: { code: string } }) {
-  try {
-    const { code } = ctx.params;
-    const body = await req.json().catch(() => ({} as any));
-    const userId: string | undefined = body?.userId || undefined;
+const prisma = new PrismaClient();
 
-    const session = await prisma.duelSession.findUnique({
-      where: { code },
-      select: { id: true, hostId: true, status: true },
-    });
-    if (!session) {
-      return NextResponse.json({ error: "Lobby not found." }, { status: 404 });
-    }
+export async function POST(req: Request, { params }: { params: { code: string } }) {
+  const code = String(params.code || "");
+  const { userId } = await req.json().catch(() => ({}));
 
-    if (!userId || session.hostId !== userId) {
-      return NextResponse.json({ error: "Only the host can start the session." }, { status: 403 });
-    }
+  if (!code) {
+    return NextResponse.json({ error: "Missing code" }, { status: 400 });
+  }
+  if (!userId) {
+    return NextResponse.json({ error: "Missing userId (host required)" }, { status: 400 });
+  }
 
-    if (session.status !== "LOBBY") {
-      return NextResponse.json({ error: "Session is not in lobby state." }, { status: 400 });
-    }
+  // Load session + players
+  const session = await prisma.duelSession.findUnique({
+    where: { code },
+    include: {
+      players: {
+        select: { id: true, role: true },
+        orderBy: { connectedAt: "asc" },
+      },
+    },
+  });
 
-    const count = await prisma.duelPlayer.count({
-      where: { sessionId: session.id },
-    });
+  if (!session) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
 
-    const updated = await prisma.duelSession.update({
+  if (session.hostId !== String(userId)) {
+    return NextResponse.json({ error: "Only the host can start the game." }, { status: 403 });
+  }
+
+  if (session.status === "RUNNING") {
+    // Idempotent
+    return NextResponse.json({ ok: true, status: "RUNNING", startedAt: session.startedAt ?? null });
+  }
+  if (session.status === "CANCELLED") {
+    return NextResponse.json({ error: "Session is cancelled." }, { status: 400 });
+  }
+
+  const now = new Date();
+
+  // Count non-spectators for this run
+  const activeIds = session.players
+    .filter((p) => p.role !== ("SPECTATOR" as DuelPlayerRole))
+    .map((p) => p.id);
+  const initialCount = activeIds.length;
+
+  // Do everything atomically
+  await prisma.$transaction(async (tx) => {
+    // 1) Stamp fresh startedAt and flip status to RUNNING
+    await tx.duelSession.update({
       where: { id: session.id },
       data: {
-        status: "RUNNING",
-        startedAt: new Date(),
-        initialPlayerCount: count,
+        status: "RUNNING" as DuelStatus,
+        startedAt: now,
+        initialPlayerCount: initialCount,
       },
-      select: { id: true, status: true, startedAt: true },
     });
 
-    return NextResponse.json({ ok: true, session: updated });
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message ?? "Failed to start session." }, { status: 500 });
-  }
+    // 2) Reset per-run flags for non-spectators (no lives/eliminated anymore)
+    if (activeIds.length > 0) {
+      await tx.duelPlayer.updateMany({
+        where: { id: { in: activeIds } },
+        data: {
+          isFinished: false,
+          finishedAt: null,
+          score: 0,
+        },
+      });
+    }
+  });
+
+  return NextResponse.json({
+    ok: true,
+    status: "RUNNING",
+    startedAt: now.toISOString(),
+    initialPlayerCount: initialCount,
+  });
 }

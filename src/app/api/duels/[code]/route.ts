@@ -1,29 +1,51 @@
-// src/app/api/duels/[code]/route.ts
+// /src/app/api/duels/[code]/route.ts
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { PrismaClient, DuelPlayerRole, DuelStatus } from "@prisma/client";
 
-export const runtime = "nodejs";
+const prisma = new PrismaClient();
 
 export async function GET(
   _req: Request,
-  ctx: { params: { code: string } }
+  { params }: { params: { code: string } }
 ) {
-  const { code } = ctx.params;
+  const code = String(params.code);
 
-  // Find session by its human-facing code
   const session = await prisma.duelSession.findUnique({
     where: { code },
-    select: {
-      id: true,
-      code: true,
-      status: true,
-      setId: true,
+    include: {
+      players: {
+        include: { user: { select: { username: true, avatar: true } } },
+        orderBy: { connectedAt: "asc" },
+      },
     },
   });
 
   if (!session) {
-    return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  return NextResponse.json(session);
+  return NextResponse.json({
+    id: session.id,
+    code: session.code,
+    setId: session.setId,
+    status: session.status as DuelStatus,
+    initialPlayerCount: session.initialPlayerCount,
+    startedAt: session.startedAt,
+    players: session.players.map((p) => ({
+      id: p.id,
+      userId: p.userId,
+      username: p.user?.username ?? null,
+      displayName: p.displayName,
+      avatar: p.user?.avatar ?? null,
+      role: p.role as DuelPlayerRole,
+      lives: p.lives,
+      score: p.score,
+      isReady: p.isReady,
+      connectedAt: p.connectedAt,
+      lastSeenAt: p.lastSeenAt,
+      eliminatedAt: p.eliminatedAt,
+      isFinished: p.isFinished,
+      finishedAt: p.finishedAt,
+    })),
+  });
 }
