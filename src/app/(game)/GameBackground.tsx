@@ -1,11 +1,17 @@
-// /src/app/(game)/GameBackground.tsx
+// src/app/(game)/GameBackground.tsx
 "use client";
 import dynamic from "next/dynamic";
+import { usePathname } from "next/navigation";
+
 const Balatro = dynamic(() => import("@/components/Balatro"), { ssr: false });
 
 export default function GameBackground() {
+  const pathname = usePathname();
+  // hide Balatro on /duels/<code>/arena
+  const isArena = /^\/duels\/[^/]+\/arena\/?$/.test(pathname || "");
+  if (isArena) return null;
+
   return (
-    // was: -z-10 —> change to z-0 so it's not behind the parent
     <div className="fixed inset-0 z-0">
       <Balatro
         isRotate={false}
