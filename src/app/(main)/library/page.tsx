@@ -21,6 +21,22 @@ import { TermsChip } from "@/components/library/TermsChip";
 import { LikesPill } from "@/components/library/LikesPill";
 import { SplitPill } from "@/components/library/SplitPill";
 import { StudyModal } from "@/components/library/StudyModal";
+import MagicNotesUploadModal from "@/components/magic-notes/MagicNotesUploadModal";
+
+/* ---------- Local type for Notes tab ---------- */
+type NoteCardData = {
+  id: string;
+  title: string;
+  summary?: string | null;
+  description?: string | null;
+  content?: string | null;
+  isPublic?: boolean;
+  visibility?: "public" | "private" | "friends";
+  createdAt: string | Date;
+  updatedAt?: string | Date | null;
+  owner?: { id?: string; username?: string; avatar?: string | null } | null;
+  likeCount?: number;
+};
 
 export default function LibraryPage() {
   const router = useRouter();
@@ -30,15 +46,24 @@ export default function LibraryPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // ====== SETS state ======
   const [recentSets, setRecentSets] = useState<SetCardData[]>([]);
   const [likedSets, setLikedSets] = useState<SetCardData[]>([]);
   const [folders, setFolders] = useState<FolderLite[]>([]);
 
+  // ====== NOTES state ======
+  const [notes, setNotes] = useState<NoteCardData[]>([]);
+  const [notesLiked, setNotesLiked] = useState<NoteCardData[]>([]); // optional future use
+
   const [query, setQuery] = useState("");
 
-  // Study modal state
+  // Study modal (sets only)
   const [studyOpen, setStudyOpen] = useState(false);
   const [studyTarget, setStudyTarget] = useState<{ id: string; title: string } | null>(null);
+
+  // Upload modal (notes)
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [uploadBusy, setUploadBusy] = useState(false);
 
   // URL state
   const activeTab = (search.get("tab") || "sets") as "sets" | "notes" | "folders";
@@ -48,6 +73,7 @@ export default function LibraryPage() {
   const rawOrder = (search.get("order") || "updated") as string;
   const order = (rawOrder === "recent" ? "updated" : rawOrder) as OrderKey;
 
+  // Read session
   useEffect(() => {
     try {
       const raw = localStorage.getItem(SESSION_KEY);
@@ -69,6 +95,7 @@ export default function LibraryPage() {
     }
   }, []);
 
+  // Load SETS (unchanged)
   useEffect(() => {
     if (!ownerId) return;
     (async () => {
@@ -94,8 +121,7 @@ export default function LibraryPage() {
           // carry-through for UI only
           // @ts-expect-error
           updatedAt: s.updatedAt,
-          visibility: s.visibility, // "friends" if your API uses it
-          // Not part of SetCardData but helpful in UI; we read it safely later:
+          visibility: s.visibility,
           termCount: s.termCount ?? s._count?.cards ?? s.cardsCount ?? undefined,
         });
 
@@ -110,23 +136,52 @@ export default function LibraryPage() {
     })();
   }, [ownerId]);
 
+  // Load NOTES
+  useEffect(() => {
+    if (!ownerId) return;
+    (async () => {
+      try {
+        const res = await fetch(`/api/magic-notes?ownerId=${encodeURIComponent(ownerId)}`, { cache: "no-store" });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) return;
+
+        const mapNote = (n: any): NoteCardData => ({
+          id: n.id,
+          title: n.title,
+          summary: n.summary ?? n.description ?? null,
+          description: n.description ?? null,
+          content: n.content ?? null,
+          isPublic: Boolean(n.isPublic),
+          visibility: n.visibility ?? (n.isPublic ? "public" : "private"),
+          createdAt: n.createdAt,
+          updatedAt: n.updatedAt ?? null,
+          owner: n.owner ?? null,
+          likeCount: n.likeCount ?? 0,
+        });
+
+        setNotes((data.notes || []).map(mapNote));
+        setNotesLiked((data.likedNotes || []).map(mapNote));
+      } catch {
+        // keep silent; notes tab stays resilient
+      }
+    })();
+  }, [ownerId]);
+
   // URL helper
   const nav = (next: Partial<{ tab: string; sort: FilterKey; order: OrderKey }>) => {
     const q = new URLSearchParams();
     q.set("tab", next.tab ?? activeTab);
-    if ((next.tab ?? activeTab) === "sets") {
-      q.set("sort", (next.sort ?? filter) as string);  // "sort" param = Filter
-      q.set("order", (next.order ?? order) as string); // sort order
-    }
+    q.set("sort", (next.sort ?? filter) as string);
+    q.set("order", (next.order ?? order) as string);
     router.push(`/library?${q.toString()}`);
   };
 
-  // 1) Filter
-  const filtered = useMemo(() => {
+  /* ============================== SETS pipelines ============================== */
+
+  const filteredSets = useMemo(() => {
     if (filter === "liked") return likedSets;
 
     if (filter === "all") {
-      // Union recent + liked (dedupe by id)
       const byId = new Map<string, SetCardData>();
       for (const s of recentSets) byId.set(s.id, s);
       for (const s of likedSets) byId.set(s.id, s);
@@ -147,21 +202,19 @@ export default function LibraryPage() {
     return recentSets;
   }, [recentSets, likedSets, filter]);
 
-  // 2) Search
-  const searched = useMemo(() => {
+  const searchedSets = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return filtered;
-    return filtered.filter(
+    if (!q) return filteredSets;
+    return filteredSets.filter(
       (s) =>
         s.title.toLowerCase().includes(q) ||
         (s.description ?? "").toLowerCase().includes(q) ||
         (s.owner?.username ?? "").toLowerCase().includes(q)
     );
-  }, [filtered, query]);
+  }, [filteredSets, query]);
 
-  // 3) Order
   const finalSets = useMemo(() => {
-    const list = [...searched];
+    const list = [...searchedSets];
     if (order === "updated") {
       list.sort((a: any, b: any) => {
         const au = a.updatedAt ?? a.createdAt;
@@ -174,18 +227,67 @@ export default function LibraryPage() {
       list.sort((a, b) => a.title.localeCompare(b.title));
     }
     return list;
-  }, [searched, order]);
+  }, [searchedSets, order]);
 
-  // Labels & counts
-  const filterLabel = filter === "friends" ? "friends only" : filter;
-  const orderLabel = order === "updated" ? "last updated" : order === "likes" ? "likes" : "name";
-  const resultCount = finalSets.length;
-  const resultWord = resultCount === 1 ? "result" : "results";
+  const likedSetIdSet = useMemo(() => new Set(likedSets.map((x) => x.id)), [likedSets]);
 
-  // Fast lookup for "is liked"
-  const likedIdSet = useMemo(() => new Set(likedSets.map((x) => x.id)), [likedSets]);
+  /* ============================== NOTES pipelines ============================== */
 
-  // Study modal helpers
+  const filteredNotes = useMemo(() => {
+    if (filter === "liked") return notesLiked.length ? notesLiked : notes;
+
+    if (filter === "all") {
+      if (!notesLiked.length) return notes;
+      const byId = new Map<string, NoteCardData>();
+      for (const n of notes) byId.set(n.id, n);
+      for (const n of notesLiked) byId.set(n.id, n);
+      return Array.from(byId.values());
+    }
+
+    if (filter === "public") return notes.filter((n) => n.isPublic === true);
+
+    if (filter === "private") {
+      return notes.filter((n) => {
+        const vis = n.visibility ?? (n.isPublic ? "public" : "private");
+        return vis === "private";
+      });
+    }
+
+    if (filter === "friends") return notes.filter((n) => n.visibility === "friends");
+
+    return notes;
+  }, [notes, notesLiked, filter]);
+
+  const searchedNotes = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return filteredNotes;
+    return filteredNotes.filter((n) => {
+      const body = (n.summary ?? n.description ?? n.content ?? "").toLowerCase();
+      return (
+        n.title.toLowerCase().includes(q) ||
+        body.includes(q) ||
+        (n.owner?.username ?? "").toLowerCase().includes(q)
+      );
+    });
+  }, [filteredNotes, query]);
+
+  const finalNotes = useMemo(() => {
+    const list = [...searchedNotes];
+    if (order === "updated") {
+      list.sort((a: any, b: any) => {
+        const au = a.updatedAt ?? a.createdAt;
+        const bu = b.updatedAt ?? b.createdAt;
+        return +new Date(bu) - +new Date(au);
+      });
+    } else if (order === "likes") {
+      list.sort((a, b) => (b.likeCount ?? 0) - (a.likeCount ?? 0));
+    } else if (order === "name") {
+      list.sort((a, b) => a.title.localeCompare(b.title));
+    }
+    return list;
+  }, [searchedNotes, order]);
+
+  // Study modal helpers (sets)
   const openStudy = (id: string, title: string) => {
     setStudyTarget({ id, title });
     setStudyOpen(true);
@@ -195,7 +297,6 @@ export default function LibraryPage() {
     setStudyTarget(null);
   };
 
-  // Handle selection coming from modal
   const onPickStudy = async (
     mode: "learn" | "flashcards" | "duels",
     opts?: {
@@ -217,15 +318,14 @@ export default function LibraryPage() {
       q.set("scope", opts?.scope ?? "all");
       if (opts?.shuffle) q.set("shuffle", "1");
       if (opts?.untimed) q.set("untimed", "1");
-      const url = `/sets/${studyTarget.id}/flashcards?${q.toString()}`;
+      const url = `/sets/${encodeURIComponent(studyTarget.id)}/flashcards?${q.toString()}`;
       closeStudy();
       router.push(url);
       return;
     }
 
-    // (Learn kept for forward compatibility — currently not shown in UI)
     if (mode === "learn") {
-      const url = `/sets/${studyTarget.id}/learn`;
+      const url = `/sets/${encodeURIComponent(studyTarget.id)}/learn`;
       closeStudy();
       router.push(url);
       return;
@@ -254,6 +354,14 @@ export default function LibraryPage() {
     }
   };
 
+  // Labels & counts for current tab
+  const activeList = activeTab === "sets" ? finalSets : activeTab === "notes" ? finalNotes : folders;
+  const resultCount = activeTab === "folders" ? folders.length : (activeList as any[]).length;
+  const resultWord = resultCount === 1 ? "result" : "results";
+  const filterLabel = filter === "friends" ? "friends only" : filter;
+  const orderLabel = order === "updated" ? "last updated" : order === "likes" ? "likes" : "name";
+  const noun = activeTab === "sets" ? "study sets" : activeTab === "notes" ? "magic notes" : "folders";
+
   return (
     <>
       {/* Header */}
@@ -262,7 +370,7 @@ export default function LibraryPage() {
       </div>
 
       {/* Compact search + triggers row */}
-      {activeTab === "sets" && (
+      {activeTab !== "folders" && (
         <>
           <div className="mb-5 flex flex-wrap items-center gap-2.5">
             {/* Search */}
@@ -277,7 +385,7 @@ export default function LibraryPage() {
                 type="search"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Find a set…"
+                placeholder={activeTab === "sets" ? "Find a set…" : "Find a note…"}
                 autoComplete="off"
                 className={[
                   "no-native-clear",
@@ -288,7 +396,7 @@ export default function LibraryPage() {
                   "focus:outline-none",
                 ].join(" ")}
                 style={{ backgroundColor: INPUT_BG }}
-                aria-label="Search sets"
+                aria-label={activeTab === "sets" ? "Search sets" : "Search notes"}
               />
             </div>
 
@@ -320,22 +428,43 @@ export default function LibraryPage() {
               size="sm"
             />
 
-            {/* Create set — compact CTA */}
-            <a
-              href="/sets/new"
-              className={[
-                "inline-flex items-center gap-1.5 rounded-[6px]",
-                "h-7 px-2",
-                "text-white/90 hover:text-white text-[12px]",
-                "bg-[#532e95] hover:bg-[#5f3aa6] active:bg-[#472b81]",
-                "ring-1 ring-white/20 hover:ring-white/10",
-                "transition-colors",
-                "focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)] focus-visible:ring-offset-2",
-              ].join(" ")}
-            >
-              <img src="/icons/add.svg" alt="" className="h-[13px] w-[13px]" />
-              <span className="font-medium">Create set</span>
-            </a>
+            {/* Create CTA */}
+            {activeTab === "sets" ? (
+              <a
+                href="/sets/new"
+                className={[
+                  "inline-flex items-center gap-1.5 rounded-[6px]",
+                  "h-7 px-2",
+                  "text-white/90 hover:text-white text-[12px]",
+                  "bg-[#532e95] hover:bg-[#5f3aa6] active:bg-[#472b81]",
+                  "ring-1 ring-white/20 hover:ring-white/10",
+                  "transition-colors",
+                  "focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)] focus-visible:ring-offset-2",
+                ].join(" ")}
+              >
+                <img src="/icons/add.svg" alt="" className="h-[13px] w-[13px]" />
+                <span className="font-medium">Create set</span>
+              </a>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setUploadOpen(true)}
+                disabled={uploadBusy}
+                className={[
+                  "inline-flex items-center gap-1.5 rounded-[6px]",
+                  "h-7 px-2",
+                  "text-white/90 hover:text-white text-[12px]",
+                  "bg-[#532e95] hover:bg-[#5f3aa6] active:bg-[#472b81]",
+                  "ring-1 ring-white/20 hover:ring-white/10",
+                  "transition-colors",
+                  "focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)] focus-visible:ring-offset-2",
+                  uploadBusy ? "opacity-60 cursor-not-allowed" : "",
+                ].join(" ")}
+              >
+                <img src="/icons/add.svg" alt="" className="h-[13px] w-[13px]" />
+                <span className="font-medium">{uploadBusy ? "Uploading…" : "Create note"}</span>
+              </button>
+            )}
           </div>
 
           <div className="mb-4 border-b border-white/10" />
@@ -346,13 +475,12 @@ export default function LibraryPage() {
               <span className="text-white font-medium">{resultCount}</span>{" "}
               <span>{resultWord} for </span>
               <span className="text-white font-medium">{filterLabel}</span>{" "}
-              <span>study sets</span>{" "}
+              <span>{noun}</span>{" "}
               <span>sorted by </span>
               <span className="text-white font-medium">{orderLabel}</span>
             </div>
           </div>
 
-          {/* Divider under status row */}
           <div className="mb-0 border-b border-white/10" />
         </>
       )}
@@ -363,6 +491,7 @@ export default function LibraryPage() {
       ) : error ? (
         <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-6 text-red-200">{error}</div>
       ) : activeTab === "sets" ? (
+        /* -------------------- SETS LIST (unchanged) -------------------- */
         <section>
           {finalSets.length === 0 ? (
             <p className="text-white/70 text-sm">
@@ -373,7 +502,7 @@ export default function LibraryPage() {
               {finalSets.map((s) => {
                 const updatedISO = (s as any).updatedAt ?? s.createdAt;
                 const isOwner = Boolean(ownerId && s.owner && (s as any).owner?.id === ownerId);
-                const isLiked = likedIdSet.has(s.id);
+                const isLiked = likedSetIdSet.has(s.id);
                 const termCount =
                   (s as any).termCount ??
                   (s as any)._count?.cards ??
@@ -396,7 +525,6 @@ export default function LibraryPage() {
                               {s.title}
                             </a>
                           ) : isLiked ? (
-                            // Liked (not owned): NOT clickable
                             <span
                               className="truncate text-[15px] font-semibold"
                               style={{ color: "#cae1f4", cursor: "default" }}
@@ -406,7 +534,6 @@ export default function LibraryPage() {
                               {s.title}
                             </span>
                           ) : (
-                            // Normal viewer (not owner, not liked): clickable to view page
                             <a
                               href={`/sets/${s.id}`}
                               className="truncate text-[15px] font-semibold hover:underline"
@@ -417,10 +544,7 @@ export default function LibraryPage() {
                             </a>
                           )}
 
-                          <VisibilityChip
-                            isPublic={s.isPublic}
-                            visibility={(s as any).visibility}
-                          />
+                          <VisibilityChip isPublic={s.isPublic} visibility={(s as any).visibility} />
                           <TermsChip count={termCount} />
                           <LikesPill count={s.likeCount ?? 0} />
                         </div>
@@ -444,7 +568,7 @@ export default function LibraryPage() {
                             <span className="h-5 w-5 rounded-full ring-1 ring-white/15 bg-white/10 inline-block" />
                           )}
                           <a
-                            href={ (s as any).owner?.username ? `/u/${(s as any).owner.username}` : "#" }
+                            href={(s as any).owner?.username ? `/u/${(s as any).owner.username}` : "#"}
                             className="text-white/85 hover:underline"
                           >
                             {"" + ((s as any).owner?.username ?? "unknown")}
@@ -481,7 +605,6 @@ export default function LibraryPage() {
                                 alert(js?.error || "Failed to delete.");
                                 return;
                               }
-                              // Remove from both lists
                               setRecentSets((r) => r.filter((x) => x.id !== s.id));
                               setLikedSets((r) => r.filter((x) => x.id !== s.id));
                             } catch {
@@ -503,7 +626,6 @@ export default function LibraryPage() {
                       </div>
                     </div>
 
-                    {/* Divider per item */}
                     <div className="mt-5 mb-0 border-b border-white/10" />
                   </li>
                 );
@@ -512,6 +634,7 @@ export default function LibraryPage() {
           )}
         </section>
       ) : activeTab === "folders" ? (
+        /* -------------------- FOLDERS -------------------- */
         <section className="rounded-2xl border border-white/10 bg-[var(--bg-card)] p-6">
           <h2 className="text-lg font-semibold text-white mb-3">Folders</h2>
           {folders.length === 0 ? (
@@ -530,17 +653,134 @@ export default function LibraryPage() {
           )}
         </section>
       ) : (
-        <section className="rounded-2xl border border-white/10 bg-[var(--bg-card)] p-6 text-white/80">
-          Magic Notes coming right up — upload a PDF to generate smart notes.
+        /* -------------------- NOTES LIST -------------------- */
+        <section>
+          {finalNotes.length === 0 ? (
+            <p className="text-white/70 text-sm">
+              {filter === "liked" ? "No liked notes yet." : "No notes found."}
+            </p>
+          ) : (
+            <ul role="list">
+              {finalNotes.map((n) => {
+                const updatedISO = n.updatedAt ?? n.createdAt;
+                const isOwner = Boolean(ownerId && n.owner && n.owner?.id === ownerId);
+
+                return (
+                  <li key={n.id} className="px-1 py-3">
+                    <div className="flex items-start justify-between gap-4">
+                      {/* LEFT (no chips beside the title for notes) */}
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 min-w-0">
+                          {isOwner ? (
+                            <a
+                              href={`/magic-notes/${n.id}/edit`}
+                              className="truncate text-[15px] font-semibold hover:underline"
+                              style={{ color: "#41a7f8" }}
+                              title={n.title}
+                            >
+                              {n.title}
+                            </a>
+                          ) : (
+                            <a
+                              href={`/magic-notes/${n.id}/view`}
+                              className="truncate text-[15px] font-semibold hover:underline"
+                              style={{ color: "#41a7f8" }}
+                              title={n.title}
+                            >
+                              {n.title}
+                            </a>
+                          )}
+                        </div>
+
+                        {/* Updated */}
+                        <div className="mt-1 mb-5 text-xs text-white/60">
+                          <span title={new Date(updatedISO as any).toLocaleString()}>
+                            Updated {fmtRel(String(updatedISO))}
+                          </span>
+                        </div>
+
+                        {/* Owner row */}
+                        <div className="mt-1 flex items-center gap-2 text-xs text-white/70">
+                          {n.owner?.avatar ? (
+                            <img
+                              src={n.owner.avatar}
+                              alt=""
+                              className="h-5 w-5 rounded-full ring-1 ring-white/15 object-cover"
+                            />
+                          ) : (
+                            <span className="h-5 w-5 rounded-full ring-1 ring-white/15 bg-white/10 inline-block" />
+                          )}
+                          <a
+                            href={n.owner?.username ? `/u/${n.owner.username}` : "#"}
+                            className="text-white/85 hover:underline"
+                          >
+                            {"" + (n.owner?.username ?? "unknown")}
+                          </a>
+                        </div>
+                      </div>
+
+                      {/* RIGHT — single “View” pill (no dropdown) */}
+                      <div className="flex min-w-[144px] flex-col items-end gap-2">
+                        <a
+                          href={`/magic-notes/${n.id}/view`}
+                          className={[
+                            "inline-flex items-center justify-center rounded-[6px]",
+                            "h-7 px-3",
+                            "text-white/90 hover:text-white text-[12px]",
+                            "bg-white/5 hover:bg-white/10",
+                            "ring-1 ring-white/20 hover:ring-white/10",
+                            "transition-colors",
+                            "focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)] focus-visible:ring-offset-2",
+                          ].join(" ")}
+                        >
+                          View
+                        </a>
+                      </div>
+                    </div>
+
+                    <div className="mt-5 mb-0 border-b border-white/10" />
+                  </li>
+                );
+              })}
+            </ul>
+          )}
         </section>
       )}
 
-      {/* STUDY OPTIONS MODAL */}
+      {/* STUDY OPTIONS MODAL (sets only) */}
       <StudyModal
         open={studyOpen}
         title={studyTarget?.title ?? ""}
         onClose={closeStudy}
         onPick={onPickStudy}
+      />
+
+      {/* MAGIC NOTES UPLOAD MODAL */}
+      <MagicNotesUploadModal
+        open={uploadOpen}
+        onClose={() => !uploadBusy && setUploadOpen(false)}
+        onConfirm={async ({ file, title }) => {
+          try {
+            setUploadBusy(true);
+            const fd = new FormData();
+            fd.set("file", file);
+            if (title) fd.set("title", title);
+
+            const res = await fetch("/api/magic-notes", { method: "POST", body: fd });
+            const js = await res.json().catch(() => ({} as any));
+            if (!res.ok || !js?.id) {
+              alert(js?.error || "Failed to create note.");
+              return;
+            }
+            setUploadOpen(false);
+            // Land on edit after creation for immediate tweaks
+            router.push(`/magic-notes/${js.id}/edit`);
+          } catch (e: any) {
+            alert(e?.message || "Network error. Please try again.");
+          } finally {
+            setUploadBusy(false);
+          }
+        }}
       />
     </>
   );

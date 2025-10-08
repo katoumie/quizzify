@@ -87,7 +87,11 @@ export async function POST(req: Request) {
       .map((c) => {
         const term = String(c.term).slice(0, 200);
         const definitionRaw = String(c.definition).slice(0, 600);
-        const definition = deLeak(term, definitionRaw); // ← remove term leakage
+        const shouldDeLeak =
+  opts.mode === "recall" ||
+  (opts.mode === "balanced" && definitionRaw.split(/\s+/).length > 10); // optional guard
+
+const definition = shouldDeLeak ? deLeak(term, definitionRaw) : definitionRaw.trim();
         return { term, definition };
       });
 
@@ -301,20 +305,28 @@ function styleRules(opts: GenOptions) {
     base.push(
       "Create straightforward recall cards.",
       "term = the key concept or prompt.",
-      "definition = the precise explanation/answer."
+      "definition = the precise explanation/answer (complete sentence(s) allowed per length rule)."
     );
   } else if (opts.mode === "reasoning") {
+    // --- Scenario → Answer style ---
     base.push(
-      "Create applied, real-world, scenario-style questions that require inference.",
-      "term = a 'why/how/which/what happens if...' style question (6–18 words).",
-      "definition = the concise reasoning that invokes the underlying principle.",
-      "Avoid trivial 'What is...' prompts."
+      "Create scenario-based question→answer cards.",
+      'term = a scenario framed as a question that sets conditions and ends with "what/which … should you use/choose/apply?" (≈10–22 words).',
+      "definition = the exact concept/technique/tool to use (noun phrase, 1–6 words, no trailing punctuation).",
+      "Do NOT include explanations in the definition; the definition is ONLY the answer phrase.",
+      "Examples:",
+      'TERM: "When the goal is quick UVs for hard-surface/mechanical shapes, which UV mapping method should you use?"',
+      'DEF:  "Smart UV Project"',
+      'TERM: "For intricate organic forms that benefit from hand-placed seams, what approach should you choose?"',
+      'DEF:  "Seam Unwrapping"'
     );
   } else {
     // balanced
     base.push(
       `Blend of recall and reasoning. Roughly ${opts.reasoningPct}% reasoning, ${100 - opts.reasoningPct}% recall.`,
-      "Interleave both types."
+      "Interleave both types.",
+      // apply the same scenario rule for the reasoning portion
+      "For any reasoning-style cards in this blend: follow the scenario-based rule above (definition is a short answer phrase, 1–6 words)."
     );
   }
 
@@ -324,14 +336,15 @@ function styleRules(opts: GenOptions) {
   return base.join("\n");
 }
 
+
 async function askOpenAI(args: AskArgs, opts: GenOptions): Promise<OutSet> {
   const system = `You are an expert study-set generator. Extract crisp "term" → "definition" pairs from the document text.
-    Prefer concise, correct, self-contained definitions. Skip duplicates and trivial noise.
+Prefer concise, correct, self-contained definitions. Skip duplicates and trivial noise.
 
-    IMPORTANT RULES
-    - Do NOT repeat the exact term (or its key subject words) inside the definition.
-      Use neutral referents like "it", "they", "this process", "this law", etc.
-    - Keep definitions 1–2 sentences, direct, and free of fluff.`;
+IMPORTANT RULES
+- Do NOT repeat the exact term (or its key subject words) inside the definition.
+  Use neutral referents like "it", "they", "this process", etc., unless the intended answer is a specific concept name.
+- Keep definitions concise. For reasoning-style cards, the definition MUST be a short phrase (not a sentence).`;
 
   const user =
     args.mode === "cards-only"

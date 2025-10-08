@@ -78,12 +78,35 @@ function normalizePlayersForRun(
   return players.map((p) => {
     const s = statsMap?.get(p.id);
 
-    // time-scoped finished flag
     const finishedOk =
       !!startMs &&
       !!p.isFinished &&
       !!p.finishedAt &&
       +p.finishedAt >= startMs;
+
+    // NEW: derive total time from finishedAt if we have no answer-based totals
+    const finishDeltaMs =
+      finishedOk && startMs != null ? Math.max(0, +p.finishedAt! - startMs) : undefined;
+
+    const baseStats = s
+      ? {
+          correct: s.correct,
+          elapsedMs: s.elapsedMs,
+          elapsedTotalMs: s.elapsedTotalMs,
+          lastCorrectAt: s.lastCorrectAt,
+        }
+      : {
+          correct: 0,
+          elapsedMs: undefined,
+          elapsedTotalMs: undefined,
+          lastCorrectAt: undefined,
+        };
+
+    // Prefer server totals from answers; otherwise use finish duration
+    const mergedStats =
+      typeof baseStats.elapsedTotalMs === "number"
+        ? baseStats
+        : { ...baseStats, elapsedTotalMs: finishDeltaMs };
 
     return {
       id: p.id,
@@ -94,22 +117,20 @@ function normalizePlayersForRun(
       username: p.user?.username ?? null,
       avatar: p.user?.avatar ?? null,
       connectedAt: p.connectedAt,
+
       // time-scoped flags
       isFinished: finishedOk ? true : false,
       finishedAt: finishedOk ? p.finishedAt : null,
+
       // DO NOT use score to infer progress (no timestamp)
       score: p.score ?? 0,
-      stats: s
-        ? {
-            correct: s.correct,
-            elapsedMs: s.elapsedMs,
-            elapsedTotalMs: s.elapsedTotalMs,
-            lastCorrectAt: s.lastCorrectAt,
-          }
-        : { correct: 0, elapsedMs: undefined, elapsedTotalMs: undefined, lastCorrectAt: undefined },
+
+      // <<— send stats with a derived total when needed
+      stats: mergedStats,
     };
   });
 }
+
 
 async function getLobbySnapshot(code: string): Promise<Snap | null> {
   const session = await prisma.duelSession.findUnique({

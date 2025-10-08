@@ -1,7 +1,7 @@
-// /src/app/api/auth/login/route.ts
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { verifyPassword } from "@/lib/password";
+import { signAuthToken, withAuthCookie } from "@/lib/auth"; // ⬅️ updated helper
 
 function isValidEmail(s: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
@@ -29,10 +29,10 @@ export async function POST(req: Request) {
         id: true,
         email: true,
         username: true,
-        avatar: true,    // keep avatar
+        avatar: true,
         passwordHash: true,
         createdAt: true,
-        role: true,      // 👈 include role so the client has it
+        role: true,
       },
     });
 
@@ -45,9 +45,17 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Invalid credentials." }, { status: 401 });
     }
 
-    // strip passwordHash before sending back
     const { passwordHash, ...publicUser } = user;
-    return NextResponse.json({ user: publicUser }, { status: 200 });
+
+    // Set JWT cookie on the response
+    const jwt = await signAuthToken({
+      sub: user.id,
+      email: user.email,
+      username: user.username ?? null,
+    });
+    const res = NextResponse.json({ user: publicUser }, { status: 200 });
+    withAuthCookie(res, jwt);
+    return res;
   } catch (err) {
     console.error("Login error:", err);
     return NextResponse.json({ error: "Server error" }, { status: 500 });

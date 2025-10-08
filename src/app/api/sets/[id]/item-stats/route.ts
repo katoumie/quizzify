@@ -1,4 +1,3 @@
-// /src/app/api/sets/[id]/item-stats/route.ts
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import {
@@ -28,9 +27,10 @@ type SetRow = {
 
 function clamp01(x: number) { return Math.max(0, Math.min(1, x)); }
 
-export async function GET(req: Request, { params }: { params: { id: string } }) {
+export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
-    const setId = params.id;
+    const { id } = await ctx.params;
+    const setId = id;
     const url = new URL(req.url);
     const userId = url.searchParams.get("userId") ?? "";
 

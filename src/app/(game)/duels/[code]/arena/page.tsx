@@ -223,7 +223,17 @@ function rankPlayersForArena(players: PlayerLite[]) {
       const aPrimary = a.correct || a.score;
       const bPrimary = b.correct || b.score;
       if (aPrimary !== bPrimary) return bPrimary - aPrimary;
-      if (a.avg !== b.avg) return a.avg - b.avg;
+
+      // Tie-breaker: lower total time wins
+      const aTot = a.total ?? Number.POSITIVE_INFINITY;
+      const bTot = b.total ?? Number.POSITIVE_INFINITY;
+      if (aTot !== bTot) return aTot - bTot;
+
+      // Next: lower average time
+      const aAvg = a.avg ?? Number.POSITIVE_INFINITY;
+      const bAvg = b.avg ?? Number.POSITIVE_INFINITY;
+      if (aAvg !== bAvg) return aAvg - bAvg;
+
       return a.id.localeCompare(b.id);
     });
 }
@@ -302,6 +312,9 @@ export default function ArenaPage() {
 
   // Diagnostics only; UI ignores it for final gating.
   const [everyoneDone, setEveryoneDone] = useState(false);
+
+  // NEW: when a question becomes visible, capture a start timestamp
+  const questionStartRef = useRef<number | null>(null);
 
   const finished = idx >= questions.length;
   const current = !finished ? questions[idx] : undefined;
@@ -520,6 +533,11 @@ export default function ArenaPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.id, code]);
 
+  /** When a new question appears, capture its start time */
+  useEffect(() => {
+    questionStartRef.current = Date.now();
+  }, [idx]);
+
   /** Progress text */
   const progressText = useMemo(() => {
     if (!questions.length) return "0 / 0";
@@ -548,6 +566,23 @@ export default function ArenaPage() {
 
     // Compute correctness AFTER flipping reveal (no visual delay)
     const isCorrect = !!current?.choices.find((c) => c.id === choiceId)?.isCorrect;
+
+    // NEW: compute per-question response time and POST an answer row
+    const started = questionStartRef.current ?? Date.now();
+    const responseMs = Math.max(0, Date.now() - started);
+    if (myPlayerId) {
+      fetch(`/api/duels/${encodeURIComponent(String(code))}/answer`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          playerId: myPlayerId,
+          isCorrect,
+          responseMs,
+          questionId: current?.cardId ?? null,
+        }),
+      }).catch(() => {});
+    }
+
     if (isCorrect) {
       void addScore(1); // fire & forget
     }
@@ -580,6 +615,7 @@ export default function ArenaPage() {
           clearInterval(id);
           setTimeoutReveal(true);
           setReveal(true);
+          // (Optional) You can also POST a timeout answer here with isCorrect=false
           return 0;
         }
         return t - 1;
@@ -628,6 +664,10 @@ export default function ArenaPage() {
         const bc = (b.stats?.correct ?? b.correct ?? b.score ?? 0) as number;
         if (ac !== bc) return bc - ac;
 
+        const aTot = (a.stats?.elapsedTotalMs ?? Number.POSITIVE_INFINITY) as number;
+        const bTot = (b.stats?.elapsedTotalMs ?? Number.POSITIVE_INFINITY) as number;
+        if (aTot !== bTot) return aTot - bTot;
+
         const at = (a.stats?.elapsedMs ?? a.elapsedMs ?? Number.POSITIVE_INFINITY) as number;
         const bt = (b.stats?.elapsedMs ?? b.elapsedMs ?? Number.POSITIVE_INFINITY) as number;
         if (at !== bt) return at - bt;
@@ -673,10 +713,7 @@ export default function ArenaPage() {
 
   const leaderboard = useMemo(() => rankPlayersForArena(players), [players]);
 
-  /** Local, strict finalization: show Final only when
-   * - session ended/cancelled, OR
-   * - every non-spectator isFinished
-   */
+  /** Local, strict finalization */
   const isFinalSession = session?.status === "ENDED" || session?.status === "CANCELLED";
   const allFinishedLocal = useMemo(() => {
     const active = players.filter((p) => p.role !== "SPECTATOR");
@@ -957,7 +994,7 @@ export default function ArenaPage() {
                                   {r.correct > 0 ? `${r.correct}` : `${r.score}`}
                                 </div>
                                 <div className="text-xs text-[#716c76]/70 font-medium">
-                                  {r.correct > 0 ? "correct" : "points"}
+                                  {r.correct > 0 ? "points" : "points"}
                                 </div>
                               </div>
                             </div>

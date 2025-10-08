@@ -37,6 +37,12 @@ model User {
   DuelSession DuelSession[]
   DuelPlayer  DuelPlayer[]
 
+  magicNotes MagicNote[]
+
+  classesOwned     Class[]       @relation("ClassOwner") // you own/created these classes
+  classMemberships ClassMember[] @relation("ClassMemberUser") // memberships (teacher/student)
+  classAssignments ClassSet[]    @relation("ClassAssignedBy") // sets you attached to classes
+
   @@index([createdAt])
 }
 
@@ -82,6 +88,7 @@ model StudySet {
   defaultSkill   Skill?        @relation("StudySet_defaultSkill", fields: [defaultSkillId], references: [id])
   defaultSkillId String?
   DuelSession    DuelSession[]
+  ClassSet       ClassSet[]
 
   @@index([ownerId, createdAt])
   @@index([folderId, createdAt])
@@ -350,25 +357,25 @@ model DuelSession {
 }
 
 model DuelPlayer {
-  id           String         @id @default(cuid())
-  sessionId    String
-  session      DuelSession    @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  userId       String?
-  user         User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
+  id        String      @id @default(cuid())
+  sessionId String
+  session   DuelSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  userId    String?
+  user      User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
 
-  displayName  String
-  role         DuelPlayerRole @default(PLAYER) // PLAYER or SPECTATOR
+  displayName String
+  role        DuelPlayerRole @default(PLAYER) // PLAYER or SPECTATOR
 
   // Kept: score/ready/connection and explicit finish flags
-  score        Int            @default(0)
-  isReady      Boolean        @default(false)
-  connectedAt  DateTime       @default(now())
-  lastSeenAt   DateTime?
-  isFinished   Boolean        @default(false)
-  finishedAt   DateTime?
+  score       Int       @default(0)
+  isReady     Boolean   @default(false)
+  connectedAt DateTime  @default(now())
+  lastSeenAt  DateTime?
+  isFinished  Boolean   @default(false)
+  finishedAt  DateTime?
 
   // Back-refs
-  answers      DuelAnswer[]
+  answers DuelAnswer[]
 
   @@index([sessionId, role])
   @@index([userId])
@@ -379,7 +386,7 @@ model DuelRound {
   sessionId      String
   session        DuelSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   roundNo        Int
-  questionCardId String      // references Card.id (string)
+  questionCardId String // references Card.id (string)
   timerSec       Int
   state          RoundState  @default(PENDING)
   startedAt      DateTime?
@@ -392,11 +399,11 @@ model DuelRound {
 }
 
 model DuelAnswer {
-  id         String     @id @default(cuid())
-  roundId    String
-  round      DuelRound  @relation(fields: [roundId], references: [id], onDelete: Cascade)
-  playerId   String
-  player     DuelPlayer @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  id       String     @id @default(cuid())
+  roundId  String
+  round    DuelRound  @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  playerId String
+  player   DuelPlayer @relation(fields: [playerId], references: [id], onDelete: Cascade)
 
   choiceIndex Int
   isCorrect   Boolean
@@ -405,4 +412,176 @@ model DuelAnswer {
 
   @@index([roundId, playerId])
   @@index([createdAt])
+}
+
+/**
+ * =========================
+ * Magic Notes (upload → AI summarize → edit/view/export)
+ * =========================
+ */
+
+enum MagicNoteStatus {
+  UPLOADED // file accepted, record created
+  EXTRACTING // parsing PDF/DOCX/PPTX
+  GENERATING // AI summarization running
+  READY // sections saved, editable/visible
+  FAILED // error occurred (see errorMessage)
+  ARCHIVED
+}
+
+enum MagicNoteSourceType {
+  PDF
+  DOCX
+  PPTX
+  UNKNOWN
+}
+
+enum MagicNoteJobStage {
+  EXTRACT
+  SUMMARIZE
+  REFINE
+}
+
+enum MagicNoteJobStatus {
+  PENDING
+  RUNNING
+  DONE
+  ERROR
+}
+
+model MagicNote {
+  id       String          @id @default(cuid())
+  owner    User            @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  ownerId  String
+  title    String
+  status   MagicNoteStatus @default(UPLOADED)
+  isPublic Boolean         @default(false)
+
+  // Source file metadata (object storage key, mime, size)
+  sourceKey  String? // e.g., "uploads/notes/abcd1234.pdf"
+  sourceName String? // original filename
+  sourceMime String? // e.g., "application/pdf"
+  sourceSize Int? // bytes
+
+  // Derived metadata
+  wordCount    Int? // approximate text words after extraction
+  sectionCount Int? // cached sections count for faster library lists
+
+  // Optional failure message
+  errorMessage String?
+
+  // Relations
+  sections MagicNoteSection[]
+  sources  MagicNoteSource[]
+  jobs     MagicNoteJob[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([ownerId, createdAt])
+  @@index([status, updatedAt])
+}
+
+model MagicNoteSection {
+  id     String    @id @default(cuid())
+  note   MagicNote @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  noteId String
+
+  position  Int // stable ordering for outline
+  heading   String? // optional section title
+  contentMd String  @db.Text // markdown body for v1 (keeps things simple/portable)
+
+  // Optional analytics/size hints
+  tokenEst Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([noteId, position])
+}
+
+model MagicNoteSource {
+  id     String    @id @default(cuid())
+  note   MagicNote @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  noteId String
+
+  type       MagicNoteSourceType @default(UNKNOWN)
+  storageKey String // canonical object-storage key of the uploaded file
+  mime       String?
+  pageCount  Int? // for PDFs
+  slideCount Int? // for PPTX
+  bytes      Int?
+
+  createdAt DateTime @default(now())
+
+  @@index([noteId, type])
+}
+
+model MagicNoteJob {
+  id     String    @id @default(cuid())
+  note   MagicNote @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  noteId String
+
+  stage  MagicNoteJobStage
+  status MagicNoteJobStatus @default(PENDING)
+  error  String?
+
+  startedAt  DateTime?
+  finishedAt DateTime?
+
+  // Optional counters/telemetry (useful for billing/observability)
+  inputTokens  Int?
+  outputTokens Int?
+  costCents    Int?
+
+  createdAt DateTime @default(now())
+
+  @@index([noteId, stage, status])
+}
+
+enum ClassMemberRole {
+  TEACHER
+  STUDENT
+}
+
+model Class {
+  id        String   @id @default(cuid())
+  name      String
+  owner     User     @relation("ClassOwner", fields: [ownerId], references: [id], onDelete: Cascade) // named
+  ownerId   String
+  joinCode  String   @unique
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members ClassMember[]
+  sets    ClassSet[]
+
+  @@index([ownerId, createdAt])
+}
+
+model ClassMember {
+  class    Class           @relation(fields: [classId], references: [id], onDelete: Cascade)
+  classId  String
+  user     User            @relation("ClassMemberUser", fields: [userId], references: [id], onDelete: Cascade) // named
+  userId   String
+  role     ClassMemberRole @default(STUDENT)
+  joinedAt DateTime        @default(now())
+
+  @@id([classId, userId])
+  @@index([userId])
+}
+
+model ClassSet {
+  class        Class     @relation(fields: [classId], references: [id], onDelete: Cascade)
+  classId      String
+  set          StudySet  @relation(fields: [setId], references: [id], onDelete: Cascade)
+  setId        String
+  assignedBy   User?     @relation("ClassAssignedBy", fields: [assignedById], references: [id], onDelete: SetNull) // named
+  assignedById String?
+  assignedAt   DateTime  @default(now())
+  dueAt        DateTime?
+
+  @@id([classId, setId])
+  @@index([setId])
 }

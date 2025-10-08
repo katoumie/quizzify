@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import {
   PieChart, Pie, Cell, ResponsiveContainer, Tooltip,
   BarChart, XAxis, YAxis, CartesianGrid, Bar
@@ -36,7 +36,7 @@ type ItemStat = {
 type ItemStatsPayload = { items: ItemStat[] };
 
 /* ── Utils ─────────────────────────────────────────────────────────────── */
-function getUserId(): string | null {
+function getSessionUserId(): string | null {
   try {
     const raw = localStorage.getItem("qz_auth");
     if (!raw) return null;
@@ -50,19 +50,33 @@ const shortDate = (iso: string | null) => (iso ? new Date(iso).toLocaleString() 
 /* ── Page ──────────────────────────────────────────────────────────────── */
 export default function SetStatisticsPage() {
   const { id: setId } = useParams<{ id: string }>();
+  const search = useSearchParams();
+
+  const [effectiveUserId, setEffectiveUserId] = useState<string | null>(null);
+  const [sessionUserId, setSessionUserId] = useState<string | null>(null);
+
   const [stats, setStats] = useState<StatsPayload | null>(null);
   const [items, setItems] = useState<ItemStat[] | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Resolve which user's stats to show: ?userId=… overrides session
   useEffect(() => {
+    const qUser = (search.get("userId") || "").trim() || null;
+    const sess = getSessionUserId();
+    setSessionUserId(sess);
+    setEffectiveUserId(qUser ?? sess ?? null);
+  }, [search]);
+
+  useEffect(() => {
+    if (!setId || !effectiveUserId) return;
+
     let cancel = false;
     (async () => {
       setLoading(true);
       try {
-        const userId = getUserId();
         const [resSkills, resItems] = await Promise.all([
-          fetch(`/api/sets/${setId}/stats?userId=${encodeURIComponent(userId ?? "")}`, { cache: "no-store" }),
-          fetch(`/api/sets/${setId}/item-stats?userId=${encodeURIComponent(userId ?? "")}`, { cache: "no-store" }),
+          fetch(`/api/sets/${setId}/stats?userId=${encodeURIComponent(effectiveUserId)}`, { cache: "no-store" }),
+          fetch(`/api/sets/${setId}/item-stats?userId=${encodeURIComponent(effectiveUserId)}`, { cache: "no-store" }),
         ]);
         const [jsSkills, jsItems] = await Promise.all([resSkills.json(), resItems.json()]);
         if (!cancel) {
@@ -76,7 +90,7 @@ export default function SetStatisticsPage() {
       }
     })();
     return () => { cancel = true; };
-  }, [setId]);
+  }, [setId, effectiveUserId]);
 
   const mastered = stats?.skills.filter(s => s.masteryAchieved).length ?? 0;
 
@@ -126,6 +140,8 @@ export default function SetStatisticsPage() {
     return bins;
   }, [items]);
 
+  const viewingOthers = effectiveUserId && sessionUserId && effectiveUserId !== sessionUserId;
+
   return (
     <main className="p-4">
       {/* dark, rounded scrollbar for our scroll containers */}
@@ -138,6 +154,12 @@ export default function SetStatisticsPage() {
       `}</style>
 
       <h1 className="text-white text-xl font-semibold mb-3">Set Statistics</h1>
+
+      {viewingOthers && (
+        <div className="mb-3 text-xs text-white/80">
+          Viewing statistics for <code className="px-1 py-0.5 rounded bg-white/5 ring-1 ring-white/10">{effectiveUserId}</code>
+        </div>
+      )}
 
       {loading ? (
         <div className="text-white/80">Loading…</div>

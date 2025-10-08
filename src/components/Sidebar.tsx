@@ -76,52 +76,22 @@ export default function Sidebar({
 
       <NavDivider />
 
-      {/* ===== Group 2 ===== */}
+      {/* ===== Group 2 (Create) ===== */}
       {!compact && (
-        <SectionHeader className="qz-hide-when-compact">Study</SectionHeader>
+        <SectionHeader className="qz-hide-when-compact">Create</SectionHeader>
       )}
       <nav className="space-y-1.5">
         <SideItem
-          href="/learn"
-          icon={<SvgFileIcon src="/icons/learn.svg" className="h-[22px] w-[22px]" />}
-          label="Learn"
-          active={isActive("/learn")}
-          compact={compact}
-        />
-        <SideItem
-          href="/flashcards"
-          icon={<SvgFileIcon src="/icons/flashcards.svg" className="h-[22px] w-[22px]" />}
-          label="Flashcards"
-          active={isActive("/flashcards")}
-          compact={compact}
-        />
-        <SideItem
-          href="/duels"
-          icon={<SvgFileIcon src="/icons/duels.svg" className="h-[22px] w-[22px]" />}
-          label="Duels"
-          active={isActive("/duels")}
-          compact={compact}
-        />
-      </nav>
-
-      <NavDivider />
-
-      {/* ===== Group 3 ===== */}
-      {!compact && (
-        <SectionHeader className="qz-hide-when-compact">Social</SectionHeader>
-      )}
-      <nav className="space-y-1.5 mb-6">
-        <SideItem
-          href="/friends"
-          icon={<SvgFileIcon src="/icons/friends.svg" className="h-[22px] w-[22px]" />}
-          label="Friends"
-          active={isActive("/friends")}
+          href="/sets/new"
+          icon={<SvgFileIcon src="/icons/study_sets.svg" className="h-[22px] w-[22px]" />}
+          label="Study sets"
+          active={isActive("/sets/new")}
           compact={compact}
         />
         <SideItemButton
-          onClick={onNotifications}
-          icon={<SvgFileIcon src="/icons/notifications.svg" className="h-[22px] w-[22px]" />}
-          label="Notifications"
+          onClick={() => {}}
+          icon={<SvgFileIcon src="/icons/magic_notes.svg" className="h-[22px] w-[22px]" />}
+          label="Magic notes"
           compact={compact}
         />
       </nav>

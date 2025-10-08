@@ -11,6 +11,7 @@ import NavSearch from "@/components/NavSearch";
 import CreateMenu from "@/components/CreateMenu";
 import ProfileMenu from "@/components/ProfileMenu";
 import SubnavLibrary from "@/components/SubnavLibrary";
+import SubnavClass from "@/components/SubnavClass"; // ⬅️ NEW
 import SvgFileIcon from "@/components/SvgFileIcon";
 
 const SESSION_KEY = "qz_auth";
@@ -161,6 +162,10 @@ export default function AppShell({
   }, [pathname]);
 
   const showLibraryTabs = pathname?.startsWith("/library") ?? false;
+  // ⬇️ NEW: show SubnavClass for /classes/[id] pages
+  const showClassTabs = pathname?.startsWith("/classes/") ?? false;
+  const classId = showClassTabs ? (pathname?.split("/")[2] || "") : "";
+
   const sidebarTopPx = NAV_H + HEADER_BORDER;
 
   return (
@@ -189,8 +194,8 @@ export default function AppShell({
             </button>
           </div>
 
-          {/* Center: inline Library tabs */}
-          {showLibraryTabs && <SubnavLibrary />}
+          {/* Center: subnavs */}
+          {showLibraryTabs ? <SubnavLibrary /> : showClassTabs ? <SubnavClass id={classId} /> : null}
 
           {/* Right: Search + Create + Profile */}
           <div className="flex items-center gap-3">
