@@ -354,6 +354,31 @@ export default function LibraryPage() {
     }
   };
 
+  const exportSetQuiz = async (setId: string, title: string) => {
+    try {
+      const res = await fetch(`/api/sets/${encodeURIComponent(setId)}/export-quiz`, {
+        method: "GET",
+      });
+      if (!res.ok) {
+        const js = await res.json().catch(() => ({} as any));
+        alert(js?.error || "Failed to export quiz PDF.");
+        return;
+      }
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${title || "quizzify-set"}-quiz.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      alert(e?.message || "Network error while exporting quiz.");
+    }
+  };
+
   // Labels & counts for current tab
   const activeList = activeTab === "sets" ? finalSets : activeTab === "notes" ? finalNotes : folders;
   const resultCount = activeTab === "folders" ? folders.length : (activeList as any[]).length;
@@ -583,6 +608,7 @@ export default function LibraryPage() {
                           isLiked={isLiked}
                           onStudy={() => openStudy(s.id, s.title)}
                           onViewStats={() => router.push(`/sets/${s.id}/statistics`)}
+                          onExportQuiz={() => exportSetQuiz(s.id, s.title)}
                           onDelete={async () => {
                             if (!confirm("Delete this set? This cannot be undone.")) return;
                             if (!ownerId) {

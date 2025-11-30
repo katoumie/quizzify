@@ -50,8 +50,6 @@ async function getTrending() {
   }
 }
 
-
-
 export default async function MainPage() {
   const trending = await getTrending();
 
@@ -70,7 +68,7 @@ export default async function MainPage() {
                 "bg-[#532e95] hover:bg-[#5f3aa6] ring-1 ring-white/20"
               )}
             >
-              <SvgFileIcon src="/icons/add_24.svg" className="h-4 w-4" />
+              <SvgFileIcon src="/icons/add.svg" className="h-4 w-4" />
               New set
             </Link>
             <Link
@@ -78,7 +76,7 @@ export default async function MainPage() {
               prefetch={false}
               className="inline-flex items-center gap-2 rounded-xl px-3.5 py-2 text-sm font-semibold bg-white/10 hover:bg-white/15 ring-1 ring-white/15"
             >
-              <SvgFileIcon src="/icons/compass.svg" className="h-4 w-4" />
+              <SvgFileIcon src="/icons/explore.svg" className="h-4 w-4" />
               Explore public sets
             </Link>
           </div>
@@ -109,7 +107,7 @@ export default async function MainPage() {
           >
             <div className="flex items-center gap-3">
               <div className="grid h-9 w-9 place-items-center rounded-lg bg-[#41a7f8]/20 ring-1 ring-white/10">
-                <SvgFileIcon src="/icons/bolt.svg" className="h-5 w-5" />
+                <SvgFileIcon src="/icons/duels.svg" className="h-5 w-5" />
               </div>
               <div>
                 <div className="text-[15px] font-semibold">Start a Duel</div>
@@ -125,7 +123,7 @@ export default async function MainPage() {
           >
             <div className="flex items-center gap-3">
               <div className="grid h-9 w-9 place-items-center rounded-lg bg-white/10 ring-1 ring-white/10">
-                <SvgFileIcon src="/icons/class.svg" className="h-5 w-5" />
+                <SvgFileIcon src="/icons/classes.svg" className="h-5 w-5" />
               </div>
               <div>
                 <div className="text-[15px] font-semibold">Join or manage classes</div>
@@ -248,7 +246,7 @@ export default async function MainPage() {
           >
             <div className="flex items-center gap-3">
               <div className="grid h-9 w-9 place-items-center rounded-lg bg-[#41a7f8]/20 ring-1 ring-white/10">
-                <SvgFileIcon src="/icons/clock.svg" className="h-5 w-5" />
+                <SvgFileIcon src="/icons/study_sets.svg" className="h-5 w-5" />
               </div>
               <div className="min-w-0">
                 <div className="text-[15px] font-semibold">Study something new</div>
@@ -264,7 +262,7 @@ export default async function MainPage() {
           >
             <div className="flex items-center gap-3">
               <div className="grid h-9 w-9 place-items-center rounded-lg bg-white/10 ring-1 ring-white/10">
-                <SvgFileIcon src="/icons/user.svg" className="h-5 w-5" />
+                <SvgFileIcon src="/icons/profile.svg" className="h-5 w-5" />
               </div>
               <div className="min-w-0">
                 <div className="text-[15px] font-semibold">Update profile</div>

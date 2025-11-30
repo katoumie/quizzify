@@ -88,10 +88,12 @@ export default function Sidebar({
           active={isActive("/sets/new")}
           compact={compact}
         />
-        <SideItemButton
-          onClick={() => {}}
+        {/* Magic notes → route to /library?tab=notes, same visual as Study sets */}
+        <SideItem
+          href="/library?tab=notes"
           icon={<SvgFileIcon src="/icons/magic_notes.svg" className="h-[22px] w-[22px]" />}
           label="Magic notes"
+          active={false}
           compact={compact}
         />
       </nav>

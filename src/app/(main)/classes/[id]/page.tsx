@@ -421,10 +421,10 @@ export default function ClassDetailPage() {
 
                     {/* RIGHT */}
                     {/* ★ allow wrapping + a tad more width so both buttons show */}
-                    <div className="flex flex-wrap min-w-[260px] flex-row items-center justify-end gap-2 relative"> {/* ★ was: min-w-[220px] without flex-wrap */}
+                    <div className="flex flex-wrap min-w-[260px] flex-row items-center justify-end gap-2 relative">
                       {isTeacher ? (
                         <>
-                          {/* View set statistics dropdown (students) */}
+                          {/* View set statistics dropdown (class + students) */}
                           <div className="relative">
                             <button
                               type="button"
@@ -455,19 +455,41 @@ export default function ClassDetailPage() {
                                 {studentMembers.length === 0 ? (
                                   <div className="px-2 py-2 text-sm text-white/60">No students yet.</div>
                                 ) : (
-                                  studentMembers.map((m) => (
+                                  <>
+                                    {/* Class-wide statistics option */}
                                     <button
-                                      key={m.userId}
+                                      type="button"
                                       role="option"
                                       onClick={() => {
                                         setStatsOpenFor(null);
-                                        router.push(`/sets/${s.id}/statistics?userId=${encodeURIComponent(m.userId)}`);
+                                        router.push(
+                                          `/sets/${encodeURIComponent(s.id)}/statistics?classId=${encodeURIComponent(
+                                            String(id)
+                                          )}`
+                                        );
                                       }}
                                       className="w-full text-left px-3 py-2 text-sm rounded-md text-white/90 hover:bg-white/10"
                                     >
-                                      {m.user.username ?? m.userId}
+                                      Class statistics (all students)
                                     </button>
-                                  ))
+                                    <div className="my-1 border-t border-white/10" />
+                                    {/* Individual students */}
+                                    {studentMembers.map((m) => (
+                                      <button
+                                        key={m.userId}
+                                        role="option"
+                                        onClick={() => {
+                                          setStatsOpenFor(null);
+                                          router.push(
+                                            `/sets/${s.id}/statistics?userId=${encodeURIComponent(m.userId)}`
+                                          );
+                                        }}
+                                        className="w-full text-left px-3 py-2 text-sm rounded-md text-white/90 hover:bg-white/10"
+                                      >
+                                        {m.user.username ?? m.userId}
+                                      </button>
+                                    ))}
+                                  </>
                                 )}
                               </div>
                             </div>
@@ -526,7 +548,9 @@ export default function ClassDetailPage() {
                           <a
                             href={
                               sessionUserId
-                                ? `/sets/${encodeURIComponent(s.id)}/statistics?userId=${encodeURIComponent(sessionUserId)}`
+                                ? `/sets/${encodeURIComponent(s.id)}/statistics?userId=${encodeURIComponent(
+                                    sessionUserId
+                                  )}`
                                 : `/sets/${encodeURIComponent(s.id)}/statistics`
                             }
                             className={[

@@ -10,6 +10,7 @@ export function SplitPill({
   onDelete,
   onUnlike,
   onViewStats,
+  onExportQuiz,
 }: {
   isOwner: boolean;
   isLiked: boolean;
@@ -17,6 +18,7 @@ export function SplitPill({
   onDelete: () => Promise<void> | void;
   onUnlike: () => Promise<void> | void;
   onViewStats?: () => void;
+  onExportQuiz?: () => Promise<void> | void;
 }) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -74,25 +76,51 @@ export function SplitPill({
       {/* Dropdown */}
       {open && (
         <div className="absolute right-0 z-40 mt-1 w-36 overflow-hidden rounded-md bg-[#18062e] py-1 text-[12px] shadow-lg ring-1 ring-white/20">
+          {/* View stats (unchanged) */}
           <button
             className="block w-full px-3 py-1.5 text-left text-white hover:bg-white/10"
-            onClick={() => { setOpen(false); onViewStats?.(); }}
+            onClick={() => {
+              setOpen(false);
+              onViewStats?.();
+            }}
           >
             View set statistics
           </button>
 
+          {/* Export quiz (new) */}
+          {onExportQuiz && (
+            <button
+              className="block w-full px-3 py-1.5 text-left text-white hover:bg-white/10"
+              onClick={async () => {
+                setOpen(false);
+                await onExportQuiz();
+              }}
+            >
+              Export set quiz
+            </button>
+          )}
+
+          {/* Owner-only Delete (unchanged) */}
           {isOwner && (
             <button
               className="block w-full px-3 py-1.5 text-left text-white hover:bg-white/10"
-              onClick={async () => { setOpen(false); await onDelete(); }}
+              onClick={async () => {
+                setOpen(false);
+                await onDelete();
+              }}
             >
               Delete
             </button>
           )}
+
+          {/* Liked-only Unlike (unchanged) */}
           {isLiked && !isOwner && (
             <button
               className="block w-full px-3 py-1.5 text-left text-white hover:bg-white/10"
-              onClick={async () => { setOpen(false); await onUnlike(); }}
+              onClick={async () => {
+                setOpen(false);
+                await onUnlike();
+              }}
             >
               Unlike
             </button>
